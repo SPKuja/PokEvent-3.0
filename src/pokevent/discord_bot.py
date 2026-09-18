@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import math
 import re
@@ -27,7 +29,7 @@ from .guild_config import (
     set_default_league,
     set_event_channel,
 )
-from .models import Event, GuildLeague, PublishedMessage, Route
+from .models import ChannelSummary, Event, GuildLeague, PublishedMessage, Route
 
 settings = get_settings()
 log = logging.getLogger("pokevent.discord")
@@ -51,6 +53,8 @@ class PokEventBot(commands.Bot):
             publish_event_routes.start()
         if not cleanup_expired_event_posts.is_running():
             cleanup_expired_event_posts.start()
+        if not refresh_channel_summaries.is_running():
+            refresh_channel_summaries.start()
 
     async def _sync_commands_to_guild(self, guild: discord.Guild) -> None:
         if not settings.sync_guild_commands or guild.id in self._synced_guild_ids:
@@ -451,6 +455,364 @@ async def _delete_published_message(
         )
 
 
+def _summary_event_line(event: Event) -> str:
+    title = discord.utils.escape_markdown(event.title)
+    if len(title) > 82:
+        title = f"{title[:79]}..."
+
+    official_url = _official_event_url(event)
+    if official_url:
+        title = f"[{title}]({official_url})"
+
+    bits = [
+        discord.utils.format_dt(event.starts_at, style="d"),
+        title,
+    ]
+    game = _game_label(event.game)
+    if game:
+        bits.append(game)
+    return " · ".join(bits)
+
+
+def _summary_embed(
+    leagues: list[GuildLeague],
+    events: list[Event],
+    default_league_id: str | None,
+) -> discord.Embed:
+    events_by_league: dict[str, list[Event]] = {}
+    for event in events:
+        if event.upstream_organisation_id is None:
+            continue
+        events_by_league.setdefault(event.upstream_organisation_id, []).append(event)
+
+    ordered = sorted(
+        leagues,
+        key=lambda league: (
+            league.league_id != default_league_id,
+            league.name.casefold(),
+        ),
+    )
+
+    embed = discord.Embed(
+        title="📌 Upcoming Pokémon Events",
+        description=(
+            "A rolling view of events for the Leagues configured on this server. "
+            "New events are announced separately."
+        ),
+    )
+
+    for league in ordered[:25]:
+        rows = events_by_league.get(league.league_id, [])
+        if rows:
+            visible = rows[:8]
+            value = "\n".join(_summary_event_line(event) for event in visible)
+            if len(rows) > len(visible):
+                value += f"\n-# +{len(rows) - len(visible)} more — use /events"
+        else:
+            value = "-# No upcoming events currently listed."
+
+        label = f"⭐ {league.name}" if league.league_id == default_league_id else league.name
+        embed.add_field(name=label[:256], value=value[:1024], inline=False)
+
+    if len(ordered) > 25:
+        embed.description = (
+            f"{embed.description}\n\n"
+            f"-# {len(ordered) - 25} additional configured Leagues are not shown "
+            "in this summary."
+        )
+
+    embed.set_footer(text="PokEvent 3.0 · updates automatically")
+    return embed
+
+
+def _embed_hash(embed: discord.Embed) -> str:
+    payload = json.dumps(embed.to_dict(), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+async def _delete_summary_message(summary: ChannelSummary) -> None:
+    channel = await _discord_channel(summary.channel_id)
+    if channel is None:
+        return
+    try:
+        message = await channel.fetch_message(int(summary.message_id))
+        await message.delete()
+    except discord.NotFound:
+        return
+    except (discord.Forbidden, discord.HTTPException):
+        log.exception(
+            "failed to delete stale summary message=%s",
+            summary.message_id,
+        )
+
+
+async def refresh_guild_summary_messages(guild_id: str) -> int:
+    now = datetime.now(UTC)
+
+    async with SessionFactory() as session:
+        config = await ensure_guild_config(session, guild_id)
+        routes = list(
+            (
+                await session.scalars(
+                    select(Route).where(
+                        Route.guild_id == guild_id,
+                        Route.enabled.is_(True),
+                        Route.upstream_organisation_id.is_not(None),
+                    )
+                )
+            ).all()
+        )
+        leagues = await guild_leagues(session, guild_id)
+        league_by_id = {league.league_id: league for league in leagues}
+
+        grouped_routes: dict[str, list[Route]] = {}
+        for route in routes:
+            if route.upstream_organisation_id not in league_by_id:
+                continue
+            grouped_routes.setdefault(route.channel_id, []).append(route)
+
+        existing = list(
+            (
+                await session.scalars(
+                    select(ChannelSummary).where(ChannelSummary.guild_id == guild_id)
+                )
+            ).all()
+        )
+        existing_by_channel = {summary.channel_id: summary for summary in existing}
+
+        for summary in existing:
+            if summary.channel_id in grouped_routes:
+                continue
+            await _delete_summary_message(summary)
+            await session.delete(summary)
+
+        refreshed = 0
+        for channel_id, channel_routes in grouped_routes.items():
+            channel = await _discord_channel(channel_id)
+            if channel is None:
+                continue
+
+            channel_leagues = [
+                league_by_id[route.upstream_organisation_id]
+                for route in channel_routes
+                if route.upstream_organisation_id in league_by_id
+            ]
+            league_ids = [league.league_id for league in channel_leagues]
+            events = list(
+                (
+                    await session.scalars(
+                        select(Event)
+                        .where(
+                            Event.status == "active",
+                            Event.starts_at >= now,
+                            Event.upstream_organisation_id.in_(league_ids),
+                        )
+                        .order_by(Event.starts_at)
+                    )
+                ).all()
+            )
+
+            embed = _summary_embed(
+                channel_leagues,
+                events,
+                config.default_league_id,
+            )
+            content_hash = _embed_hash(embed)
+            summary = existing_by_channel.get(channel_id)
+            message: discord.Message | None = None
+
+            if summary is not None:
+                try:
+                    message = await channel.fetch_message(int(summary.message_id))
+                except discord.NotFound:
+                    message = None
+                except (discord.Forbidden, discord.HTTPException):
+                    log.exception(
+                        "failed to fetch summary message=%s",
+                        summary.message_id,
+                    )
+                    continue
+
+            if message is None:
+                try:
+                    message = await channel.send(embed=embed)
+                    try:
+                        await message.pin(reason="PokEvent upcoming events summary")
+                    except (discord.Forbidden, discord.HTTPException):
+                        log.exception(
+                            "failed to pin summary in channel=%s",
+                            channel_id,
+                        )
+                except (discord.Forbidden, discord.HTTPException):
+                    log.exception(
+                        "failed to create summary in channel=%s",
+                        channel_id,
+                    )
+                    continue
+
+                if summary is None:
+                    summary = ChannelSummary(
+                        guild_id=guild_id,
+                        channel_id=channel_id,
+                        message_id=str(message.id),
+                        content_hash=content_hash,
+                    )
+                    session.add(summary)
+                else:
+                    summary.message_id = str(message.id)
+                    summary.content_hash = content_hash
+                refreshed += 1
+                continue
+
+            if not message.pinned:
+                try:
+                    await message.pin(reason="PokEvent upcoming events summary")
+                except (discord.Forbidden, discord.HTTPException):
+                    log.exception(
+                        "failed to pin summary in channel=%s",
+                        channel_id,
+                    )
+
+            if summary is not None and summary.content_hash != content_hash:
+                try:
+                    await message.edit(embed=embed)
+                except (discord.Forbidden, discord.HTTPException):
+                    log.exception(
+                        "failed to update summary message=%s",
+                        summary.message_id,
+                    )
+                    continue
+                summary.content_hash = content_hash
+                refreshed += 1
+
+        await session.commit()
+        return refreshed
+
+
+async def _backfill_target(guild_id: str, target: str, count: int) -> int:
+    count = max(0, min(count, 10))
+    if count == 0:
+        return 0
+
+    async with SessionFactory() as session:
+        config = await ensure_guild_config(session, guild_id)
+        key = target.strip().casefold()
+
+        if key == "all":
+            if not config.all_channel_id:
+                raise ValueError("The all-Leagues announcement channel is not configured.")
+            routes = list(
+                (
+                    await session.scalars(
+                        select(Route).where(
+                            Route.guild_id == guild_id,
+                            Route.enabled.is_(True),
+                            Route.channel_id == config.all_channel_id,
+                            Route.upstream_organisation_id
+                            != config.default_league_id,
+                        )
+                    )
+                ).all()
+            )
+        else:
+            if key == "default":
+                if not config.default_league_id:
+                    raise ValueError("This server does not have a default League yet.")
+                league = await session.scalar(
+                    select(GuildLeague).where(
+                        GuildLeague.guild_id == guild_id,
+                        GuildLeague.league_id == config.default_league_id,
+                    )
+                )
+            else:
+                league = await resolve_guild_league(session, guild_id, target)
+
+            if league is None:
+                raise ValueError(f"Unknown League: {target}")
+
+            route = await session.scalar(
+                select(Route).where(
+                    Route.guild_id == guild_id,
+                    Route.upstream_organisation_id == league.league_id,
+                    Route.enabled.is_(True),
+                )
+            )
+            routes = [route] if route is not None else []
+
+        if not routes:
+            raise ValueError("That target does not have an announcement channel configured.")
+
+        leagues = await guild_leagues(session, guild_id)
+        league_names = {league.league_id: league.name for league in leagues}
+
+        candidates: list[tuple[Route, Event]] = []
+        for route in routes:
+            if route.upstream_organisation_id is None:
+                continue
+            events = list(
+                (
+                    await session.scalars(
+                        select(Event)
+                        .where(
+                            Event.status == "active",
+                            Event.starts_at >= datetime.now(UTC),
+                            Event.upstream_organisation_id
+                            == route.upstream_organisation_id,
+                        )
+                        .order_by(Event.starts_at)
+                    )
+                ).all()
+            )
+            for event in events:
+                already_published = await session.scalar(
+                    select(PublishedMessage.id).where(
+                        PublishedMessage.route_id == route.id,
+                        PublishedMessage.event_id == event.id,
+                    )
+                )
+                if already_published is None:
+                    candidates.append((route, event))
+
+        candidates.sort(key=lambda item: item[1].starts_at)
+        posted = 0
+
+        for route, event in candidates[:count]:
+            channel = await _discord_channel(route.channel_id)
+            if channel is None:
+                continue
+
+            league_name = league_names.get(route.upstream_organisation_id or "")
+            try:
+                message = await channel.send(
+                    embed=_event_embed(event, league_name),
+                    view=_event_link_view(event),
+                )
+                thread = await _create_event_thread(message, event)
+            except (discord.Forbidden, discord.HTTPException):
+                log.exception(
+                    "failed to backfill event=%s route=%s",
+                    event.id,
+                    route.id,
+                )
+                continue
+
+            session.add(
+                PublishedMessage(
+                    route_id=route.id,
+                    event_id=event.id,
+                    guild_id=route.guild_id,
+                    channel_id=str(channel.id),
+                    message_id=str(message.id),
+                    thread_id=str(thread.id) if thread is not None else None,
+                    last_content_hash=event.content_hash,
+                )
+            )
+            posted += 1
+
+        await session.commit()
+        return posted
+
+
 async def _publish_route(route: Route) -> None:
     if route.baseline_at is None or route.upstream_organisation_id is None:
         return
@@ -617,6 +979,36 @@ async def cleanup_expired_event_posts() -> None:
             log.info("removed %s expired Discord event posts", len(expired))
 
 
+@tasks.loop(minutes=5)
+async def refresh_channel_summaries() -> None:
+    async with SessionFactory() as session:
+        route_guild_ids = set(
+            (
+                await session.scalars(
+                    select(Route.guild_id).where(Route.enabled.is_(True)).distinct()
+                )
+            ).all()
+        )
+        summary_guild_ids = set(
+            (
+                await session.scalars(
+                    select(ChannelSummary.guild_id).distinct()
+                )
+            ).all()
+        )
+
+    for guild_id in route_guild_ids | summary_guild_ids:
+        try:
+            await refresh_guild_summary_messages(guild_id)
+        except Exception:
+            log.exception("failed to refresh event summaries for guild=%s", guild_id)
+
+
+@refresh_channel_summaries.before_loop
+async def before_refresh_channel_summaries() -> None:
+    await bot.wait_until_ready()
+
+
 @cleanup_expired_event_posts.before_loop
 async def before_cleanup_expired_event_posts() -> None:
     await bot.wait_until_ready()
@@ -645,7 +1037,6 @@ async def _guild_choices(
 
     if include_special:
         specials = (
-            ("Nearby", "nearby"),
             ("Default", "default"),
             ("All non-default Leagues", "all"),
         )
@@ -676,15 +1067,14 @@ async def _events_autocomplete(
     interaction: discord.Interaction,
     current: str,
 ) -> list[app_commands.Choice[str]]:
-    return await _guild_choices(interaction, current, include_special=True)
+    return await _guild_choices(interaction, current)
 
 
 async def _channel_target_autocomplete(
     interaction: discord.Interaction,
     current: str,
 ) -> list[app_commands.Choice[str]]:
-    choices = await _guild_choices(interaction, current, include_special=True)
-    return [choice for choice in choices if choice.value != "nearby"]
+    return await _guild_choices(interaction, current, include_special=True)
 
 
 async def _send_error(interaction: discord.Interaction, message: str) -> None:
@@ -711,7 +1101,7 @@ async def status(interaction: discord.Interaction) -> None:
 @bot.tree.command(name="events", description="Browse upcoming Pokémon events.")
 @app_commands.guild_only()
 @app_commands.describe(
-    league="Leave blank for the server default, choose a League, or choose nearby.",
+    league="Leave blank for the server default, or choose a configured League.",
 )
 async def events(
     interaction: discord.Interaction,
@@ -724,52 +1114,44 @@ async def events(
     async with SessionFactory() as session:
         config = await ensure_guild_config(session, guild_id)
 
-        if selector.casefold() == "nearby":
-            heading = "Nearby Pokémon events"
-            statement = (
-                select(Event)
-                .where(Event.starts_at >= datetime.now(UTC), Event.status == "active")
-                .order_by(Event.starts_at)
-                .limit(EVENTS_QUERY_LIMIT)
-            )
-        else:
-            if selector.casefold() == "default":
-                if not config.default_league_id:
-                    await session.commit()
-                    await interaction.response.send_message(
-                        "This server does not have a default League yet. "
-                        "A server administrator can set one with /league default.",
-                        ephemeral=True,
-                    )
-                    return
-                chosen = await session.scalar(
-                    select(GuildLeague).where(
-                        GuildLeague.guild_id == guild_id,
-                        GuildLeague.league_id == config.default_league_id,
-                    )
-                )
-            else:
-                chosen = await resolve_guild_league(session, guild_id, selector)
-
-            if chosen is None:
+        if selector.casefold() == "default":
+            if not config.default_league_id:
                 await session.commit()
                 await interaction.response.send_message(
-                    f"I don't know a League called **{selector}** on this server.",
+                    "This server does not have a default League yet. "
+                    "A server administrator can run /pokevent setup or "
+                    "set one with /league default.",
                     ephemeral=True,
                 )
                 return
-
-            heading = f"{chosen.name} events"
-            statement = (
-                select(Event)
-                .where(
-                    Event.starts_at >= datetime.now(UTC),
-                    Event.status == "active",
-                    Event.upstream_organisation_id == chosen.league_id,
+            chosen = await session.scalar(
+                select(GuildLeague).where(
+                    GuildLeague.guild_id == guild_id,
+                    GuildLeague.league_id == config.default_league_id,
                 )
-                .order_by(Event.starts_at)
-                .limit(EVENTS_QUERY_LIMIT)
             )
+        else:
+            chosen = await resolve_guild_league(session, guild_id, selector)
+
+        if chosen is None:
+            await session.commit()
+            await interaction.response.send_message(
+                f"I don't know a League called **{selector}** on this server.",
+                ephemeral=True,
+            )
+            return
+
+        heading = f"{chosen.name} events"
+        statement = (
+            select(Event)
+            .where(
+                Event.starts_at >= datetime.now(UTC),
+                Event.status == "active",
+                Event.upstream_organisation_id == chosen.league_id,
+            )
+            .order_by(Event.starts_at)
+            .limit(EVENTS_QUERY_LIMIT)
+        )
 
         rows = list((await session.scalars(statement)).all())
         await session.commit()
@@ -1001,6 +1383,7 @@ async def eventchannel_set(
         "Send Messages": permissions.send_messages,
         "Create Public Threads": permissions.create_public_threads,
         "Manage Threads": permissions.manage_threads,
+        "Manage Messages": permissions.manage_messages,
     }
     missing_permissions = [
         name for name, allowed in required_permissions.items() if not allowed
@@ -1022,6 +1405,7 @@ async def eventchannel_set(
                 str(resolved_channel.id),
             )
             await session.commit()
+        await refresh_guild_summary_messages(str(interaction.guild_id))
     except ValueError as exc:
         await _send_error(interaction, str(exc))
         return
@@ -1136,6 +1520,48 @@ async def eventchannel_test_autocomplete(
 
 
 @eventchannel_group.command(
+    name="backfill",
+    description="Post a small number of already-known upcoming events.",
+)
+@_admin_only
+@app_commands.describe(
+    target="default, all, or a configured League",
+    count="Number of existing events to publish now (maximum 10)",
+)
+async def eventchannel_backfill(
+    interaction: discord.Interaction,
+    target: str,
+    count: app_commands.Range[int, 1, 10] = 3,
+) -> None:
+    assert interaction.guild_id is not None
+
+    try:
+        posted = await _backfill_target(
+            str(interaction.guild_id),
+            target,
+            int(count),
+        )
+        await refresh_guild_summary_messages(str(interaction.guild_id))
+    except ValueError as exc:
+        await _send_error(interaction, str(exc))
+        return
+
+    await interaction.response.send_message(
+        f"Published **{posted}** existing event card"
+        f"{'s' if posted != 1 else ''}.",
+        ephemeral=True,
+    )
+
+
+@eventchannel_backfill.autocomplete("target")
+async def eventchannel_backfill_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    return await _channel_target_autocomplete(interaction, current)
+
+
+@eventchannel_group.command(
     name="clear",
     description="Clear an automatic event announcement channel.",
 )
@@ -1151,6 +1577,7 @@ async def eventchannel_clear(interaction: discord.Interaction, target: str) -> N
                 target,
             )
             await session.commit()
+        await refresh_guild_summary_messages(str(interaction.guild_id))
     except ValueError as exc:
         await _send_error(interaction, str(exc))
         return

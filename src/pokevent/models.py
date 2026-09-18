@@ -189,3 +189,27 @@ class PublishedMessage(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
+
+
+
+class ChannelSummary(Base):
+    __tablename__ = "channel_summaries"
+    __table_args__ = (
+        UniqueConstraint(
+            "guild_id",
+            "channel_id",
+            name="uq_channel_summary_guild_channel",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    guild_id: Mapped[str] = mapped_column(
+        ForeignKey("guild_configs.guild_id", ondelete="CASCADE"), nullable=False
+    )
+    channel_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    message_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )

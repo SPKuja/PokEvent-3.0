@@ -247,8 +247,6 @@ async def set_event_channel(
     elif key == "all":
         config.all_channel_id = channel_id
         description = "all non-default Leagues"
-    elif key == "nearby":
-        raise ValueError("Nearby events are browse-only and cannot be auto-posted.")
     else:
         league = await resolve_guild_league(session, guild_id, target)
         if league is None:
@@ -279,8 +277,6 @@ async def clear_event_channel(
     elif key == "all":
         config.all_channel_id = None
         description = "all non-default Leagues"
-    elif key == "nearby":
-        raise ValueError("Nearby events do not have an auto-post channel.")
     else:
         league = await resolve_guild_league(session, guild_id, target)
         if league is None:
@@ -412,9 +408,6 @@ async def resolve_event_channel(
 
     if key == "all":
         return None, config.all_channel_id
-
-    if key == "nearby":
-        raise ValueError("Nearby events do not have an auto-post channel.")
 
     league = await resolve_guild_league(session, guild_id, target)
     if league is None:
