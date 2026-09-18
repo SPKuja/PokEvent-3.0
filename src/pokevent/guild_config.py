@@ -3,11 +3,11 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import get_settings
-from .models import GuildConfig, GuildLeague, Route
+from .models import GuildConfig, GuildLeague, Route, utcnow
 
 settings = get_settings()
 
@@ -367,3 +367,25 @@ async def all_monitored_league_ids(
         ).all()
     )
     return ids
+
+
+async def baseline_pending_routes(session: AsyncSession) -> int:
+    routes = list(
+        (
+            await session.scalars(
+                select(Route).where(
+                    Route.enabled.is_(True),
+                    Route.baseline_at.is_(None),
+                )
+            )
+        ).all()
+    )
+    if not routes:
+        return 0
+
+    baseline = utcnow()
+    for route in routes:
+        route.baseline_at = baseline
+
+    await session.flush()
+    return len(routes)

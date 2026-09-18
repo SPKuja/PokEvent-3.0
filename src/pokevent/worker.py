@@ -8,19 +8,20 @@ from .catalogue import upsert_snapshots
 from .config import get_settings
 from .db import SessionFactory
 from .domain import EventSearch, EventSnapshot
+from .guild_config import all_monitored_league_ids, baseline_pending_routes
 from .sources.pokedata import PokedataSource
 
 log = logging.getLogger("pokevent.worker")
 settings = get_settings()
 
 
-def build_source() -> PokedataSource:
+def build_source(monitored_league_ids: set[str]) -> PokedataSource:
     if settings.event_source == "pokedata":
         return PokedataSource(
             country_code=settings.country_code,
             local_timezone=settings.local_timezone,
             horizon_days=settings.event_horizon_days,
-            monitored_league_ids=set(settings.leagues),
+            monitored_league_ids=monitored_league_ids,
         )
     raise RuntimeError(f"Unsupported POKEVENT_EVENT_SOURCE: {settings.event_source}")
 
@@ -38,7 +39,13 @@ def apply_league_registry(snapshot: EventSnapshot) -> EventSnapshot:
 
 
 async def sync_once() -> None:
-    source = build_source()
+    async with SessionFactory() as session:
+        monitored_ids = await all_monitored_league_ids(
+            session,
+            settings.leagues.keys(),
+        )
+
+    source = build_source(monitored_ids)
     search = EventSearch(
         latitude=settings.home_latitude,
         longitude=settings.home_longitude,
@@ -52,14 +59,18 @@ async def sync_once() -> None:
 
     async with SessionFactory() as session:
         result = await upsert_snapshots(session, snapshots)
+        baselined = await baseline_pending_routes(session)
+        await session.commit()
 
     log.info(
-        "sync complete source=%s fetched=%s created=%s updated=%s unchanged=%s",
+        "sync complete source=%s fetched=%s created=%s updated=%s unchanged=%s "
+        "routes_baselined=%s",
         source.name,
         result.fetched,
         result.created,
         result.updated,
         result.unchanged,
+        baselined,
     )
 
 

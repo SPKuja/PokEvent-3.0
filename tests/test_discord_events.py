@@ -17,9 +17,10 @@ def _event(index: int) -> Event:
 def test_event_page_content_paginates_upcoming_events() -> None:
     rows = [_event(index) for index in range(EVENTS_PAGE_SIZE + 2)]
 
-    first = event_page_content(rows, 0)
-    second = event_page_content(rows, 1)
+    first = event_page_content(rows, 0, "Test events")
+    second = event_page_content(rows, 1, "Test events")
 
+    assert "### Test events" in first
     assert "**Event 0**" in first
     assert "**Event 9**" in first
     assert "**Event 10**" not in first
