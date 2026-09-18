@@ -16,14 +16,6 @@ from .base import EventSource, EventSourceError
 POKEDATA_API_V2 = "https://pokedata.ovh/events/apiv2"
 MIN_COMPLETE_SHARE = 0.95
 
-FRIENDLY_TYPE_NAMES = {
-    "nonpremier tcg": "League / Friendly",
-    "nonpremier vg": "League / Friendly",
-    "nonpremier vgc": "League / Friendly",
-    "nonpremier go": "League / Friendly",
-}
-
-
 def _text(value: Any) -> str | None:
     if value is None:
         return None
@@ -104,9 +96,26 @@ def _status(raw: dict[str, Any]) -> EventStatus:
 
 
 def _is_unnamed_friendly(raw: dict[str, Any]) -> bool:
-    raw_type = (_text(raw.get("type")) or "").lower()
+    raw_type = (
+        _text(raw.get("type"))
+        or _text(raw.get("Subtype"))
+        or ""
+    ).lower()
     name = _text(raw.get("Name")) or _text(raw.get("name"))
     return raw_type.startswith("nonpremier ") and not name
+
+
+def _event_type(raw: dict[str, Any]) -> str | None:
+    raw_type = _text(raw.get("type")) or _text(raw.get("Subtype"))
+    if not raw_type:
+        return None
+
+    if raw_type.lower().startswith("nonpremier "):
+        if _is_unnamed_friendly(raw):
+            return "League Session"
+        return "Friendly Tournament"
+
+    return raw_type
 
 
 def _starts_at(raw: dict[str, Any], local_timezone: ZoneInfo) -> datetime:
@@ -142,8 +151,7 @@ def parse_pokedata_event(
     except Exception as exc:
         raise EventSourceError(f"Invalid event timezone {local_timezone!r}") from exc
 
-    raw_type = _text(raw.get("type")) or _text(raw.get("Subtype"))
-    event_type = FRIENDLY_TYPE_NAMES.get((raw_type or "").lower(), raw_type)
+    event_type = _event_type(raw)
     shop = _text(raw.get("shop"))
     title = (
         _text(raw.get("Name"))

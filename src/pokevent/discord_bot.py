@@ -17,6 +17,12 @@ from sqlalchemy import select
 from . import __version__
 from .config import get_settings
 from .db import SessionFactory
+from .event_policy import (
+    CARD_EVENT_TYPES,
+    DEFAULT_CARD_EVENT_TYPES,
+    effective_card_event_types,
+    event_card_type,
+)
 from .guild_config import (
     add_guild_league,
     clear_event_channel,
@@ -313,7 +319,7 @@ def _event_embed(
         description="\n".join(sections),
         timestamp=event.starts_at,
     )
-    embed.set_footer(text="PokEvent 3.0 · Play! Pokémon")
+    embed.set_footer(text="PokÈvent 3.0 · Play! Pokémon")
     return embed
 
 def _event_link_view(event: Event) -> discord.ui.View | None:
@@ -349,14 +355,14 @@ def _event_link_view(event: Event) -> discord.ui.View | None:
 
 
 bot = PokEventBot()
-pokevent = app_commands.Group(name="pokevent", description="PokEvent 3.0")
+pokevent = app_commands.Group(name="pokevent", description="PokÈvent 3.0")
 league_group = app_commands.Group(
     name="league",
     description="Configure this server's Play! Pokémon Leagues.",
 )
 eventchannel_group = app_commands.Group(
     name="eventchannel",
-    description="Configure automatic PokEvent announcement channels.",
+    description="Configure automatic PokÈvent announcement channels.",
 )
 
 
@@ -387,7 +393,7 @@ async def _create_event_thread(
         return await message.create_thread(
             name=_thread_name(event),
             auto_archive_duration=1440,
-            reason="PokEvent event discussion thread",
+            reason="PokÈvent event discussion thread",
         )
     except (discord.Forbidden, discord.HTTPException):
         log.exception(
@@ -521,7 +527,7 @@ def _summary_embed(
             "in this summary."
         )
 
-    embed.set_footer(text="PokEvent 3.0 · updates automatically")
+    embed.set_footer(text="PokÈvent 3.0 · updates automatically")
     return embed
 
 
@@ -637,7 +643,7 @@ async def refresh_guild_summary_messages(guild_id: str) -> int:
                 try:
                     message = await channel.send(embed=embed)
                     try:
-                        await message.pin(reason="PokEvent upcoming events summary")
+                        await message.pin(reason="PokÈvent upcoming events summary")
                     except (discord.Forbidden, discord.HTTPException):
                         log.exception(
                             "failed to pin summary in channel=%s",
@@ -666,7 +672,7 @@ async def refresh_guild_summary_messages(guild_id: str) -> int:
 
             if not message.pinned:
                 try:
-                    await message.pin(reason="PokEvent upcoming events summary")
+                    await message.pin(reason="PokÈvent upcoming events summary")
                 except (discord.Forbidden, discord.HTTPException):
                     log.exception(
                         "failed to pin summary in channel=%s",
@@ -696,6 +702,7 @@ async def _backfill_target(guild_id: str, target: str, count: int) -> int:
 
     async with SessionFactory() as session:
         config = await ensure_guild_config(session, guild_id)
+        enabled_card_types = effective_card_event_types(config.card_event_types)
         key = target.strip().casefold()
 
         if key == "all":
@@ -764,6 +771,9 @@ async def _backfill_target(guild_id: str, target: str, count: int) -> int:
                 ).all()
             )
             for event in events:
+                if event_card_type(event.event_type) not in enabled_card_types:
+                    continue
+
                 already_published = await session.scalar(
                     select(PublishedMessage.id).where(
                         PublishedMessage.route_id == route.id,
@@ -819,6 +829,8 @@ async def _publish_route(route: Route) -> None:
 
     now = datetime.now(UTC)
     async with SessionFactory() as session:
+        config = await ensure_guild_config(session, route.guild_id)
+        enabled_card_types = effective_card_event_types(config.card_event_types)
         league = await session.scalar(
             select(GuildLeague).where(
                 GuildLeague.guild_id == route.guild_id,
@@ -851,6 +863,8 @@ async def _publish_route(route: Route) -> None:
             )
 
             if published is None:
+                if event_card_type(event.event_type) not in enabled_card_types:
+                    continue
                 if not route.announce_new or event.first_seen_at <= route.baseline_at:
                     continue
 
@@ -1109,7 +1123,7 @@ async def _validate_announcement_channel(
             )
 
     if not isinstance(resolved, discord.TextChannel):
-        return None, "Please choose a normal text channel for PokEvent announcements."
+        return None, "Please choose a normal text channel for PokÈvent announcements."
 
     permissions = resolved.permissions_for(bot_member)
     required_permissions = {
@@ -1157,20 +1171,22 @@ async def _setup_dashboard_content(
     )
     ready = bool(config.default_league_id and config.default_channel_id)
     status = "✅ Ready" if ready else "⚠️ Setup incomplete"
+    enabled_card_types = effective_card_event_types(config.card_event_types)
 
     league_names = ", ".join(league.name for league in leagues[:6]) or "None"
     if len(leagues) > 6:
         league_names += f" +{len(leagues) - 6} more"
 
     lines = [
-        "## ⚙️ PokEvent Admin",
+        "## ⚙️ PokÈvent Admin",
         f"**Status:** {status}",
         f"**Default League:** {default_name}",
         f"**Default channel:** {default_channel}",
         f"**Other configured Leagues:** {other_channel}",
         f"**Configured Leagues:** {len(leagues)} · {league_names}",
+        f"**Announcement card types:** {len(enabled_card_types)}/{len(CARD_EVENT_TYPES)} enabled",
         "",
-        "Use the controls below to manage PokEvent without filling the slash-command list.",
+        "Use the controls below to manage PokÈvent without filling the slash-command list.",
     ]
     if notice:
         lines.extend(["", f"**{notice}**"])
@@ -1291,6 +1307,7 @@ class SetupDashboardView(discord.ui.View):
         self.add_item(SetupDashboardButton(self, "add", "Add League", row=0))
         self.add_item(SetupDashboardButton(self, "manage", "Manage Leagues", row=0))
         self.add_item(SetupDashboardButton(self, "channels", "Channels", row=0))
+        self.add_item(SetupDashboardButton(self, "types", "Event Types", row=1))
         self.add_item(SetupDashboardButton(self, "posts", "Event Posts", row=1))
         self.add_item(SetupDashboardButton(self, "refresh", "Refresh Summary", row=1))
         self.add_item(SetupDashboardButton(self, "close", "Close", row=1))
@@ -1364,6 +1381,22 @@ class SetupDashboardView(discord.ui.View):
             )
             return
 
+        if action == "types":
+            async with SessionFactory() as session:
+                config = await ensure_guild_config(session, self.guild_id)
+                enabled = effective_card_event_types(config.card_event_types)
+                await session.commit()
+            view = EventTypeManagerView(
+                invoker_id=self.invoker_id,
+                guild_id=self.guild_id,
+                enabled=enabled,
+            )
+            await interaction.response.edit_message(
+                content=view.content(),
+                view=view,
+            )
+            return
+
         if action == "posts":
             async with SessionFactory() as session:
                 leagues = await guild_leagues(session, self.guild_id)
@@ -1418,7 +1451,7 @@ class SetupDashboardView(discord.ui.View):
             )
             await interaction.response.edit_message(
                 content=(
-                    "## PokEvent setup · 1/4\n"
+                    "## PokÈvent setup · 1/4\n"
                     "Choose this server's **default League**. This is what /events "
                     "shows when no League is specified.\n\n"
                     f"{league_lines}"
@@ -1429,11 +1462,183 @@ class SetupDashboardView(discord.ui.View):
 
         if action == "close":
             await interaction.response.edit_message(
-                content="PokEvent setup closed. Run /pokevent setup to reopen it.",
+                content="PokÈvent setup closed. Run /pokevent setup to reopen it.",
                 view=None,
             )
             self.stop()
             return
+
+
+class EventTypeSelect(discord.ui.Select):
+    DESCRIPTIONS = {
+        "League Session": "Routine recurring League play",
+        "Friendly Tournament": "Named non-premier tournament",
+        "League Challenge": "Premier local League Challenge",
+        "League Cup": "Premier local League Cup",
+        "Pre-Release": "Set prerelease event",
+        "Playtime": "Casual organised play",
+        "Other / Unknown": "New or unrecognised event type",
+    }
+
+    def __init__(self, manager: EventTypeManagerView) -> None:
+        self.manager = manager
+        options = [
+            discord.SelectOption(
+                label=event_type,
+                value=event_type,
+                description=self.DESCRIPTIONS[event_type],
+                default=event_type in manager.enabled,
+            )
+            for event_type in CARD_EVENT_TYPES
+        ]
+        super().__init__(
+            placeholder="Choose event types that create announcement cards",
+            min_values=1,
+            max_values=len(options),
+            options=options,
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        self.manager.enabled = set(self.values)
+        await self.manager.save()
+        self.manager.rebuild()
+        await interaction.response.edit_message(
+            content=self.manager.content(notice="Announcement card types updated."),
+            view=self.manager,
+        )
+
+
+class EventTypeButton(discord.ui.Button):
+    def __init__(
+        self,
+        manager: EventTypeManagerView,
+        action: str,
+        label: str,
+        style: discord.ButtonStyle = discord.ButtonStyle.secondary,
+    ) -> None:
+        self.manager = manager
+        self.action = action
+        super().__init__(label=label, style=style, row=1)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self.manager.handle_action(interaction, self.action)
+
+
+class EventTypeManagerView(discord.ui.View):
+    def __init__(
+        self,
+        *,
+        invoker_id: int,
+        guild_id: str,
+        enabled: set[str],
+    ) -> None:
+        super().__init__(timeout=600)
+        self.invoker_id = invoker_id
+        self.guild_id = guild_id
+        self.enabled = set(enabled)
+        self.rebuild()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.invoker_id:
+            return True
+        await interaction.response.send_message(
+            "Only the administrator who opened this setup can use these controls.",
+            ephemeral=True,
+        )
+        return False
+
+    async def save(self) -> None:
+        async with SessionFactory() as session:
+            config = await ensure_guild_config(session, self.guild_id)
+            config.card_event_types = [
+                event_type
+                for event_type in CARD_EVENT_TYPES
+                if event_type in self.enabled
+            ]
+            await session.commit()
+
+    def content(self, notice: str | None = None) -> str:
+        lines = [
+            "## 🎟️ Announcement Card Types",
+            "Choose which event categories create full announcement cards and "
+            "discussion threads.",
+            "",
+        ]
+        lines.extend(
+            f"{'✅' if event_type in self.enabled else '▫️'} **{event_type}**"
+            for event_type in CARD_EVENT_TYPES
+        )
+        lines.extend(
+            [
+                "",
+                "-# The pinned Upcoming Events summary and /events still show all "
+                "configured events, including League Sessions.",
+                "-# Changing this affects future auto-posts and backfill; it does not "
+                "delete cards that were already posted.",
+            ]
+        )
+        if notice:
+            lines.extend(["", f"**{notice}**"])
+        return "\n".join(lines)
+
+    def rebuild(self) -> None:
+        self.clear_items()
+        self.add_item(EventTypeSelect(self))
+        self.add_item(
+            EventTypeButton(
+                self,
+                "defaults",
+                "Use Defaults",
+                discord.ButtonStyle.primary,
+            )
+        )
+        self.add_item(
+            EventTypeButton(
+                self,
+                "none",
+                "Disable All Cards",
+                discord.ButtonStyle.danger,
+            )
+        )
+        self.add_item(EventTypeButton(self, "back", "Back"))
+
+    async def handle_action(
+        self,
+        interaction: discord.Interaction,
+        action: str,
+    ) -> None:
+        if action == "back":
+            view = SetupDashboardView(
+                invoker_id=self.invoker_id,
+                guild_id=self.guild_id,
+            )
+            await interaction.response.edit_message(
+                content=await _setup_dashboard_content(self.guild_id),
+                view=view,
+            )
+            return
+
+        if action == "defaults":
+            self.enabled = set(DEFAULT_CARD_EVENT_TYPES)
+            await self.save()
+            self.rebuild()
+            await interaction.response.edit_message(
+                content=self.content(
+                    notice="Default tournament-focused policy restored."
+                ),
+                view=self,
+            )
+            return
+
+        if action == "none":
+            self.enabled = set()
+            await self.save()
+            self.rebuild()
+            await interaction.response.edit_message(
+                content=self.content(notice="Automatic announcement cards disabled."),
+                view=self,
+            )
 
 
 class AddLeagueModal(discord.ui.Modal, title="Add Play! Pokémon League"):
@@ -2351,7 +2556,7 @@ class SetupWizard(discord.ui.View):
         self.show_default_channel_step()
         await interaction.response.edit_message(
             content=(
-                "## PokEvent setup · 2/4\n"
+                "## PokÈvent setup · 2/4\n"
                 f"Default League: **{chosen.name}**\n\n"
                 "Choose the channel where this League's event cards and pinned "
                 "upcoming-events summary should appear."
@@ -2397,7 +2602,7 @@ class SetupWizard(discord.ui.View):
             self.show_other_channel_step()
             await interaction.response.edit_message(
                 content=(
-                    "## PokEvent setup · 3/4\n"
+                    "## PokÈvent setup · 3/4\n"
                     f"Default League: **{self._league_name()}**\n"
                     f"Default channel: {channel.mention}\n\n"
                     "What should PokEvent do with your **other configured Leagues**? "
@@ -2411,7 +2616,7 @@ class SetupWizard(discord.ui.View):
         self.show_backfill_step()
         await interaction.response.edit_message(
             content=(
-                "## PokEvent setup · 4/4\n"
+                "## PokÈvent setup · 4/4\n"
                 f"Other configured Leagues will use {channel.mention}.\n\n"
                 "The pinned summary will make all existing upcoming events visible. "
                 "How many already-known **default League** events should also be "
@@ -2429,7 +2634,7 @@ class SetupWizard(discord.ui.View):
             self.show_other_channel_picker()
             await interaction.response.edit_message(
                 content=(
-                    "## PokEvent setup · 3/4\n"
+                    "## PokÈvent setup · 3/4\n"
                     "Choose the channel for all non-default configured Leagues. "
                     "Specific League channel overrides can be added later."
                 ),
@@ -2466,7 +2671,7 @@ class SetupWizard(discord.ui.View):
         self.show_backfill_step()
         await interaction.response.edit_message(
             content=(
-                "## PokEvent setup · 4/4\n"
+                "## PokÈvent setup · 4/4\n"
                 "The pinned summary will make existing upcoming events visible "
                 "without flooding the channel.\n\n"
                 "How many already-known **default League** events should also be "
@@ -2521,7 +2726,7 @@ async def status(interaction: discord.Interaction) -> None:
 
 @pokevent.command(
     name="setup",
-    description="Open the PokEvent setup and administration dashboard.",
+    description="Open the PokÈvent setup and administration dashboard.",
 )
 @_admin_only
 async def pokevent_setup(interaction: discord.Interaction) -> None:
@@ -2577,7 +2782,7 @@ async def pokevent_setup(interaction: discord.Interaction) -> None:
         league_lines += f"\n• …and {len(leagues) - 10} more"
 
     await interaction.response.send_message(
-        "## PokEvent setup · 1/4\n"
+        "## PokÈvent setup · 1/4\n"
         "Choose this server's **default League**. This is what /events shows "
         "when no League is specified.\n\n"
         f"{league_lines}\n\n"

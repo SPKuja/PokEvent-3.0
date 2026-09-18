@@ -1,14 +1,14 @@
-# PokEvent 3.0
+# PokÈvent 3.0
 
-PokEvent 3.0 is a community-first Pokémon event discovery and publishing platform.
+PokÈvent 3.0 is a community-first Pokémon event discovery and publishing platform.
 
-Play! Pokémon is the authority for event identity. PokEvent builds one
+Play! Pokémon is the authority for event identity. PokÈvent builds one
 normalised local catalogue, then publishes that catalogue to Discord, a public
 web/API surface and subscribable iCalendar feeds.
 
 ## Why 3.0
 
-PokEvent 3.0 removes Facebook from the event pipeline. Discord is no longer the
+PokÈvent 3.0 removes Facebook from the event pipeline. Discord is no longer the
 database either: it is one output of the central catalogue.
 
 The goal is full local-community coverage: TCG, VGC and Pokémon GO; Cups,
@@ -47,7 +47,7 @@ Implemented:
 - Alembic migrations;
 - CI quality gate.
 
-The rendered official Event Locator is not scraped. PokEvent uses structured
+The rendered official Event Locator is not scraped. PokÈvent uses structured
 mirrored Play! Pokémon records and keeps the upstream source adapter isolated.
 
 ## Development

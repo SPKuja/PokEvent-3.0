@@ -14,7 +14,7 @@ from .db import SessionFactory
 from .models import Event
 
 settings = get_settings()
-app = FastAPI(title="PokEvent", version=__version__)
+app = FastAPI(title="PokÈvent", version=__version__)
 
 
 @app.get("/health")
@@ -65,7 +65,7 @@ async def calendar_feed() -> Response:
         ).all()
 
     calendar = Calendar()
-    calendar.add("prodid", "-//PokEvent 3.0//EN")
+    calendar.add("prodid", "-//PokÈvent 3.0//EN")
     calendar.add("version", "2.0")
     calendar.add("x-wr-calname", f"{settings.community_name} Events")
 

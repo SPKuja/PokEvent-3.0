@@ -102,6 +102,7 @@ class GuildConfig(Base):
     default_league_id: Mapped[str | None] = mapped_column(String(255))
     default_channel_id: Mapped[str | None] = mapped_column(String(32))
     all_channel_id: Mapped[str | None] = mapped_column(String(32))
+    card_event_types: Mapped[list[str] | None] = mapped_column(JSON)
     leagues_seeded: Mapped[bool] = mapped_column(Boolean, default=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

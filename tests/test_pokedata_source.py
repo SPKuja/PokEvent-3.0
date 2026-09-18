@@ -40,3 +40,29 @@ def test_known_swindon_league_id_maps_to_routing_identity() -> None:
         event,
         RouteCriteria(upstream_organisation_id="2012924"),
     )
+
+
+
+def test_unnamed_nonpremier_event_is_a_league_session() -> None:
+    raw = dict(SWINDON_SHAPE_FIXTURE)
+    raw["guid"] = "fixture-league-session"
+    raw["type"] = "nonpremier TCG"
+    raw.pop("name", None)
+
+    event = parse_pokedata_event(raw)
+
+    assert event.event_type == "League Session"
+    assert event.game is Game.TCG
+
+
+def test_named_nonpremier_event_is_a_friendly_tournament() -> None:
+    raw = dict(SWINDON_SHAPE_FIXTURE)
+    raw["guid"] = "fixture-friendly-tournament"
+    raw["type"] = "nonpremier TCG"
+    raw["name"] = "Saturday Friendly Tournament"
+
+    event = parse_pokedata_event(raw)
+
+    assert event.event_type == "Friendly Tournament"
+    assert event.title == "Saturday Friendly Tournament"
+    assert event.game is Game.TCG
