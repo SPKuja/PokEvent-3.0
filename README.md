@@ -96,3 +96,23 @@ Discord bot and event-sync worker services.
 
 See [docs/architecture.md](docs/architecture.md) and
 [docs/event-source-research.md](docs/event-source-research.md).
+
+## Portainer deployment
+
+For Portainer, use the dedicated `docker-compose.portainer.yml` file. It does
+not require a physical `.env` file; values are supplied through Portainer's
+stack environment variables.
+
+Required variables:
+
+- `POSTGRES_PASSWORD` — strong database password;
+- `POKEVENT_DISCORD_TOKEN` — Discord bot token.
+
+Recommended variables:
+
+- `POKEVENT_LEAGUES={"2012924":"Pokémon League Swindon"}`;
+- `POKEVENT_PUBLIC_BASE_URL` — public HTTPS URL once reverse proxying is set up.
+
+The web service joins the external `NeuralNet` Docker network for reverse-proxy
+access and exposes port 8080 by default. PostgreSQL remains on the stack's
+private default network.
