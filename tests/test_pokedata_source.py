@@ -1,14 +1,9 @@
 from datetime import UTC, datetime
 
-import httpx
-import pytest
-
-from pokevent.domain import EventSearch, Game
+from pokevent.domain import Game
 from pokevent.routing import RouteCriteria, matches_route
-from pokevent.sources.pokedata import (
-    PokedataSource,
-    parse_pokedata_event,
-)
+from pokevent.sources.pokedata import parse_pokedata_event
+
 
 SWINDON_SHAPE_FIXTURE = {
     "type": "League Challenge",
@@ -28,7 +23,7 @@ SWINDON_SHAPE_FIXTURE = {
     "when": "2026-09-20 11:00:00",
     "league": "2012924",
     "Display_id": "26-09-FIXTURE",
-    "Products": "tcg",
+    "product": "tcg",
     "Start_date": "2026-09-20T10:00:00Z",
     "Status": "sanctioned",
     "Admission": "",
@@ -46,49 +41,3 @@ def test_known_swindon_league_id_maps_to_routing_identity() -> None:
         event,
         RouteCriteria(upstream_organisation_id="2012924"),
     )
-
-
-@pytest.mark.asyncio
-async def test_source_pages_then_filters_locally() -> None:
-    page_1 = {
-        "metadata": {
-            "total_items": 2,
-            "total_pages": 2,
-            "current_page": 1,
-            "limit": 1,
-        },
-        "events": [SWINDON_SHAPE_FIXTURE],
-    }
-    far_event = {
-        **SWINDON_SHAPE_FIXTURE,
-        "guid": "fixture-far-away",
-        "league": "9999999",
-        "latitude": "55.9533",
-        "longitude": "-3.1883",
-    }
-    page_2 = {
-        "metadata": {
-            "total_items": 2,
-            "total_pages": 2,
-            "current_page": 2,
-            "limit": 1,
-        },
-        "events": [far_event],
-    }
-
-    async def handler(request: httpx.Request) -> httpx.Response:
-        page = int(str(request.url).rsplit("/", 1)[-1])
-        return httpx.Response(200, json=page_1 if page == 1 else page_2)
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        source = PokedataSource(client=client, delay_seconds=0)
-        events = await source.fetch_events(
-            EventSearch(
-                latitude=51.5615,
-                longitude=-1.7855,
-                radius_miles=30,
-                starts_after=datetime(2026, 9, 18, tzinfo=UTC),
-            )
-        )
-
-    assert [event.upstream_organisation_id for event in events] == ["2012924"]

@@ -13,7 +13,7 @@ from pokevent.routing import distance_miles
 from .base import EventSource, EventSourceError
 
 POKEDATA_LEGACY_API = "https://pokedata.ovh/events/api"
-POKEDATA_TABLE_API = "https://www.pokedata.ovh/events/tableapi/index_table.php"
+POKEDATA_TABLE_API = "https://www.pokedata.ovh/events/tableapi/"
 TABLE_PAGE_SIZE = 100
 TABLE_PAGE_LIMIT = 100
 
