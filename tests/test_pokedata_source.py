@@ -4,7 +4,6 @@ from pokevent.domain import Game
 from pokevent.routing import RouteCriteria, matches_route
 from pokevent.sources.pokedata import parse_pokedata_event
 
-
 SWINDON_SHAPE_FIXTURE = {
     "type": "League Challenge",
     "name": "Pokemon League Swindon League Challenge - shape fixture",
