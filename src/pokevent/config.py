@@ -26,9 +26,10 @@ class Settings(BaseSettings):
     home_latitude: float = 51.5615
     home_longitude: float = -1.7855
     default_radius_miles: float = 30.0
+
     country_code: str = "GB"
     local_timezone: str = "Europe/London"
-    friendly_horizon_days: int = 45
+    event_horizon_days: int = 90
 
     event_source: str = "pokedata"
     sync_interval_minutes: int = 180

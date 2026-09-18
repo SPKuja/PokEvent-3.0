@@ -19,7 +19,8 @@ def build_source() -> PokedataSource:
         return PokedataSource(
             country_code=settings.country_code,
             local_timezone=settings.local_timezone,
-            friendly_horizon_days=settings.friendly_horizon_days,
+            horizon_days=settings.event_horizon_days,
+            monitored_league_ids=set(settings.leagues),
         )
     raise RuntimeError(f"Unsupported POKEVENT_EVENT_SOURCE: {settings.event_source}")
 

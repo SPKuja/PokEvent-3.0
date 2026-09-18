@@ -7,104 +7,140 @@ from pokevent.domain import EventSearch, Game
 from pokevent.sources.pokedata import PokedataSource, parse_pokedata_event
 
 
-def regional_row(
+def row(
     *,
     guid: str,
-    league: str = "2012924",
-    event_type: str = "League Challenge",
-    when: str = "2026-09-20 11:00:00",
+    league: str,
+    event_type: str,
+    product: str,
+    latitude: str = "51.5606",
+    longitude: str = "-1.78633",
+    name: str | None = None,
 ) -> dict:
     return {
         "guid": guid,
         "league": league,
         "type": event_type,
-        "name": f"Pokemon League Swindon - {event_type}",
+        "product": product,
+        "name": name,
         "shop": "THE INCREDIBLE COMIC SHOP",
-        "when": when,
-        "date": when[:10],
-        "latitude": "51.5606",
-        "longitude": "-1.78633",
+        "when": "2026-09-20 11:00:00",
+        "date": "2026-09-20",
+        "latitude": latitude,
+        "longitude": longitude,
         "city": "Swindon",
         "country_code": "GB",
         "pokemon_url": "https://www.pokemon.com/play-pokemon-tournaments/example/",
     }
 
 
-def friendly_row(
-    *,
-    guid: str,
-    type_name: str,
-    when: str = "2026-09-21 18:00:00",
-) -> dict:
-    return {
-        "guid": guid,
-        "league": "2012924",
-        "type": type_name,
-        "name": "",
-        "shop": "THE INCREDIBLE COMIC SHOP",
-        "when": when,
-        "date": when[:10],
-        "latitude": "51.5606",
-        "longitude": "-1.78633",
-        "city": "Swindon",
-        "country_code": "GB",
-        "pokemon_url": "https://www.pokemon.com/play-pokemon-tournaments//",
-    }
-
-
-def test_regional_wall_time_uses_configured_timezone() -> None:
-    event = parse_pokedata_event(
-        regional_row(guid="challenge"),
-        game_hint=Game.TCG,
-        local_timezone="Europe/London",
+def test_parser_classifies_all_three_games() -> None:
+    tcg = parse_pokedata_event(
+        row(
+            guid="tcg",
+            league="2012924",
+            event_type="nonpremier TCG",
+            product="tcg",
+        )
+    )
+    vgc = parse_pokedata_event(
+        row(
+            guid="vgc",
+            league="2",
+            event_type="nonpremier VG",
+            product="vg",
+        )
+    )
+    go = parse_pokedata_event(
+        row(
+            guid="go",
+            league="3",
+            event_type="nonpremier GO",
+            product="pgo",
+        )
     )
 
-    assert event.game is Game.TCG
-    assert event.starts_at.hour == 11
-    assert event.starts_at.utcoffset() is not None
-    assert event.starts_at.utcoffset().total_seconds() == 3600
+    assert tcg.game is Game.TCG
+    assert vgc.game is Game.VGC
+    assert go.game is Game.GO
+    assert tcg.event_type == "League / Friendly"
+    assert vgc.event_type == "League / Friendly"
+    assert go.event_type == "League / Friendly"
 
 
-def test_unnamed_friendly_when_is_treated_as_utc() -> None:
+def test_unknown_event_type_is_preserved() -> None:
     event = parse_pokedata_event(
-        friendly_row(guid="friendly", type_name="nonpremier TCG"),
-        local_timezone="Europe/London",
-        table_friendly=True,
+        row(
+            guid="future",
+            league="2012924",
+            event_type="Future Pokemon Event Type",
+            product="new-product",
+        )
     )
 
-    assert event.game is Game.TCG
-    assert event.event_type == "League / Friendly"
-    assert event.starts_at.utcoffset() is not None
-    assert event.starts_at.utcoffset().total_seconds() == 0
+    assert event.game is Game.OTHER
+    assert event.event_type == "Future Pokemon Event Type"
 
 
 @pytest.mark.asyncio
-async def test_full_source_combines_tcg_vgc_go_and_friendlies() -> None:
-    responses = {
-        "_tcg": [regional_row(guid="tcg")],
-        "_vg": [regional_row(guid="vg", event_type="League Cup")],
-        "_go": [regional_row(guid="go", event_type="League Cup")],
+async def test_source_pages_complete_country_date_catalogue_and_filters_locally() -> None:
+    page_1 = {
+        "metadata": {
+            "total_items": 3,
+            "total_pages": 2,
+            "current_page": 1,
+            "limit": 100,
+        },
+        "events": [
+            row(
+                guid="swindon",
+                league="2012924",
+                event_type="League Challenge",
+                product="tcg",
+            ),
+            row(
+                guid="nearby-vgc",
+                league="other",
+                event_type="nonpremier VG",
+                product="vg",
+                latitude="51.65",
+                longitude="-1.90",
+            ),
+        ],
     }
-    table_rows = [
-        friendly_row(guid="ftcg", type_name="nonpremier TCG"),
-        friendly_row(guid="fvg", type_name="nonpremier VG"),
-        friendly_row(guid="fgo", type_name="nonpremier GO"),
-    ]
+    page_2 = {
+        "metadata": {
+            "total_items": 3,
+            "total_pages": 2,
+            "current_page": 2,
+            "limit": 100,
+        },
+        "events": [
+            row(
+                guid="far",
+                league="far-league",
+                event_type="nonpremier GO",
+                product="pgo",
+                latitude="53.4808",
+                longitude="-2.2426",
+            ),
+        ],
+    }
 
     async def handler(request: httpx.Request) -> httpx.Response:
-        if request.method == "POST":
-            return httpx.Response(200, json=table_rows)
         url = str(request.url)
-        for marker, payload in responses.items():
-            if marker in url:
-                return httpx.Response(200, json=payload)
-        return httpx.Response(404)
+        page = 2 if "/_page/2" in url else 1
+        assert "/_country/GB/" in url
+        assert "/_start/2026-09-18/" in url
+        assert "/_end/2026-12-17/" in url
+        return httpx.Response(200, json=page_2 if page == 2 else page_1)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         source = PokedataSource(
             client=client,
-            country_code="GB",
-            local_timezone="Europe/London",
+            delay_seconds=0,
+            horizon_days=90,
+            monitored_league_ids={"2012924"},
         )
         events = await source.fetch_events(
             EventSearch(
@@ -116,29 +152,41 @@ async def test_full_source_combines_tcg_vgc_go_and_friendlies() -> None:
         )
 
     assert {event.upstream_event_id for event in events} == {
-        "tcg",
-        "vg",
-        "go",
-        "ftcg",
-        "fvg",
-        "fgo",
+        "swindon",
+        "nearby-vgc",
     }
-    assert {event.game for event in events} == {Game.TCG, Game.VGC, Game.GO}
 
 
 @pytest.mark.asyncio
-async def test_countrywide_friendly_outside_radius_is_removed() -> None:
-    far = friendly_row(guid="far", type_name="nonpremier TCG")
-    far["latitude"] = "53.4808"
-    far["longitude"] = "-2.2426"
+async def test_monitored_league_survives_distance_filter() -> None:
+    payload = {
+        "metadata": {
+            "total_items": 1,
+            "total_pages": 1,
+            "current_page": 1,
+            "limit": 100,
+        },
+        "events": [
+            row(
+                guid="away-day",
+                league="2012924",
+                event_type="League Cup",
+                product="tcg",
+                latitude="52.4862",
+                longitude="-1.8904",
+            )
+        ],
+    }
 
-    async def handler(request: httpx.Request) -> httpx.Response:
-        if request.method == "POST":
-            return httpx.Response(200, json=[far])
-        return httpx.Response(200, json=[])
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        source = PokedataSource(client=client)
+        source = PokedataSource(
+            client=client,
+            delay_seconds=0,
+            monitored_league_ids={"2012924"},
+        )
         events = await source.fetch_events(
             EventSearch(
                 latitude=51.5615,
@@ -148,4 +196,39 @@ async def test_countrywide_friendly_outside_radius_is_removed() -> None:
             )
         )
 
-    assert events == []
+    assert [event.upstream_event_id for event in events] == ["away-day"]
+
+
+@pytest.mark.asyncio
+async def test_source_rejects_repeated_or_wrong_page() -> None:
+    payload = {
+        "metadata": {
+            "total_items": 101,
+            "total_pages": 2,
+            "current_page": 1,
+            "limit": 100,
+        },
+        "events": [
+            row(
+                guid="one",
+                league="2012924",
+                event_type="League Challenge",
+                product="tcg",
+            )
+        ],
+    }
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        source = PokedataSource(client=client, attempts=1, delay_seconds=0)
+        with pytest.raises(Exception, match="returned page 1 when 2 was requested"):
+            await source.fetch_events(
+                EventSearch(
+                    latitude=51.5615,
+                    longitude=-1.7855,
+                    radius_miles=30,
+                    starts_after=datetime(2026, 9, 18, tzinfo=UTC),
+                )
+            )

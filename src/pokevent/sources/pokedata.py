@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, date, datetime, timedelta, tzinfo
+from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -12,16 +13,8 @@ from pokevent.routing import distance_miles
 
 from .base import EventSource, EventSourceError
 
-POKEDATA_LEGACY_API = "https://pokedata.ovh/events/api"
-POKEDATA_TABLE_API = "https://www.pokedata.ovh/events/tableapi/"
-TABLE_PAGE_SIZE = 100
-TABLE_PAGE_LIMIT = 100
-
-REGIONAL_STREAMS: tuple[tuple[Game, str], ...] = (
-    (Game.TCG, "_tcg/cups/challenges/pre"),
-    (Game.VGC, "_vg/cups/challenges"),
-    (Game.GO, "_go/cups/challenges"),
-)
+POKEDATA_API_V2 = "https://pokedata.ovh/events/apiv2"
+MIN_COMPLETE_SHARE = 0.95
 
 FRIENDLY_TYPE_NAMES = {
     "nonpremier tcg": "League / Friendly",
@@ -68,25 +61,38 @@ def _parse_wall_datetime(value: Any, timezone: tzinfo) -> datetime | None:
     return parsed
 
 
-def _game(raw: dict[str, Any], game_hint: Game | None = None) -> Game:
-    if game_hint is not None:
-        return game_hint
-
+def _product_games(raw: dict[str, Any]) -> set[Game]:
     product = (
-        _text(raw.get("Products"))
-        or _text(raw.get("product"))
+        _text(raw.get("product"))
+        or _text(raw.get("Products"))
         or ""
     ).lower()
+
+    games: set[Game] = set()
+    for token in (part.strip() for part in product.split(",")):
+        if token == "tcg":
+            games.add(Game.TCG)
+        elif token in {"vg", "vgc", "video game"}:
+            games.add(Game.VGC)
+        elif token in {"go", "pgo", "pokemon go"}:
+            games.add(Game.GO)
+    return games
+
+
+def _game(raw: dict[str, Any]) -> Game:
     event_type = (_text(raw.get("type")) or "").lower()
 
-    if product == "tcg" or "tcg" in event_type:
+    if "nonpremier tcg" in event_type:
         return Game.TCG
-    if product in {"vg", "vgc", "video game"} or any(
-        token in event_type for token in (" vgc", " vg", "video game")
-    ):
+    if "nonpremier vg" in event_type or "nonpremier vgc" in event_type:
         return Game.VGC
-    if product in {"go", "pokemon go"} or "pokemon go" in event_type or event_type.endswith(" go"):
+    if "nonpremier go" in event_type:
         return Game.GO
+
+    games = _product_games(raw)
+    if len(games) == 1:
+        return next(iter(games))
+
     return Game.OTHER
 
 
@@ -98,26 +104,21 @@ def _status(raw: dict[str, Any]) -> EventStatus:
 
 
 def _is_unnamed_friendly(raw: dict[str, Any]) -> bool:
+    raw_type = (_text(raw.get("type")) or "").lower()
     name = _text(raw.get("Name")) or _text(raw.get("name"))
-    pokemon_url = _text(raw.get("pokemon_url")) or ""
-    return not name and pokemon_url.rstrip("/").endswith("play-pokemon-tournaments")
+    return raw_type.startswith("nonpremier ") and not name
 
 
-def _starts_at(
-    raw: dict[str, Any],
-    *,
-    local_timezone: ZoneInfo,
-    table_friendly: bool,
-) -> datetime:
+def _starts_at(raw: dict[str, Any], local_timezone: ZoneInfo) -> datetime:
     start = _parse_iso_datetime(raw.get("Start_date"))
     if start is not None:
         if start.tzinfo is None:
             return start.replace(tzinfo=local_timezone)
         return start
 
-    # Pokedata's unnamed friendly/table rows use UTC in when; named rows
-    # and the regional sanctioned feed use venue wall time.
-    timezone: tzinfo = UTC if table_friendly and _is_unnamed_friendly(raw) else local_timezone
+    # Pokedata's unnamed local/League rows historically expose UTC in "when".
+    # Named listings use venue wall time.
+    timezone: tzinfo = UTC if _is_unnamed_friendly(raw) else local_timezone
     fallback = _parse_wall_datetime(raw.get("when"), timezone)
     if fallback is None:
         guid = _text(raw.get("guid")) or _text(raw.get("Guid")) or "unknown"
@@ -128,11 +129,9 @@ def _starts_at(
 def parse_pokedata_event(
     raw: dict[str, Any],
     *,
-    game_hint: Game | None = None,
     local_timezone: str = "Europe/London",
-    table_friendly: bool = False,
 ) -> EventSnapshot:
-    """Normalise one Play! Pokemon event mirrored by Pokedata."""
+    """Normalise one Play! Pokemon event mirrored by Pokedata API v2."""
 
     guid = _text(raw.get("guid")) or _text(raw.get("Guid"))
     if not guid:
@@ -142,12 +141,6 @@ def parse_pokedata_event(
         timezone = ZoneInfo(local_timezone)
     except Exception as exc:
         raise EventSourceError(f"Invalid event timezone {local_timezone!r}") from exc
-
-    starts_at = _starts_at(
-        raw,
-        local_timezone=timezone,
-        table_friendly=table_friendly,
-    )
 
     raw_type = _text(raw.get("type")) or _text(raw.get("Subtype"))
     event_type = FRIENDLY_TYPE_NAMES.get((raw_type or "").lower(), raw_type)
@@ -169,10 +162,10 @@ def parse_pokedata_event(
         upstream_event_id=guid,
         upstream_organisation_id=_text(raw.get("league")),
         title=title,
-        game=_game(raw, game_hint),
+        game=_game(raw),
         event_type=event_type,
         status=_status(raw),
-        starts_at=starts_at,
+        starts_at=_starts_at(raw, timezone),
         organisation_name=shop,
         venue_name=shop,
         address=_text(raw.get("street_address")),
@@ -188,7 +181,13 @@ def parse_pokedata_event(
 
 
 class PokedataSource(EventSource):
-    """Structured mirror/fallback covering sanctioned and friendly Play! events."""
+    """Paginated API-v2 mirror of Play! Pokemon events.
+
+    API v2's country and date filters are used upstream. Its documented radius
+    filter currently returns empty data for valid searches, so Pokevent applies
+    geographic filtering locally. Configured League IDs are always retained,
+    even when their event is outside the community discovery radius.
+    """
 
     name = "pokedata"
 
@@ -197,15 +196,19 @@ class PokedataSource(EventSource):
         *,
         client: httpx.AsyncClient | None = None,
         attempts: int = 4,
+        delay_seconds: float = 0.15,
         country_code: str = "GB",
         local_timezone: str = "Europe/London",
-        friendly_horizon_days: int = 45,
+        horizon_days: int = 90,
+        monitored_league_ids: set[str] | None = None,
     ) -> None:
         self._client = client
         self.attempts = attempts
+        self.delay_seconds = delay_seconds
         self.country_code = country_code.upper()
         self.local_timezone = local_timezone
-        self.friendly_horizon_days = friendly_horizon_days
+        self.horizon_days = horizon_days
+        self.monitored_league_ids = monitored_league_ids or set()
 
     @staticmethod
     def _headers() -> dict[str, str]:
@@ -214,229 +217,157 @@ class PokedataSource(EventSource):
             "User-Agent": "PokEvent/3.0 (+https://github.com/SPKuja/PokEvent-3.0)",
         }
 
-    @staticmethod
-    def regional_url(path: str, search: EventSearch) -> str:
+    def query_url(self, search: EventSearch, page: int) -> str:
         start = (
             search.starts_after.date()
             if search.starts_after
             else datetime.now(UTC).date()
         )
+        end = start + timedelta(days=self.horizon_days)
+        country = quote(self.country_code, safe="")
+
         return (
-            f"{POKEDATA_LEGACY_API}/{path}"
-            f"/_latitude/{search.latitude}"
-            f"/_longitude/{search.longitude}"
-            f"/_radius/{search.radius_miles}"
-            f"/_unit/mi/_start/{start.isoformat()}"
+            f"{POKEDATA_API_V2}"
+            f"/_country/{country}"
+            f"/_start/{start.isoformat()}"
+            f"/_end/{end.isoformat()}"
+            f"/_page/{page}"
         )
 
-    async def _request_json(
+    async def _fetch_page(
         self,
         client: httpx.AsyncClient,
-        *,
-        method: str,
-        url: str,
-        json_body: dict[str, Any] | None = None,
-    ) -> Any:
+        search: EventSearch,
+        page: int,
+    ) -> tuple[list[dict[str, Any]], int, int]:
         last_error: Exception | None = None
+
         for attempt in range(1, self.attempts + 1):
             try:
-                response = await client.request(
-                    method,
-                    url,
-                    headers={
-                        **self._headers(),
-                        **({"Content-Type": "application/json"} if json_body else {}),
-                    },
-                    json=json_body,
+                response = await client.get(
+                    self.query_url(search, page),
+                    headers=self._headers(),
                 )
                 response.raise_for_status()
-                return response.json()
-            except (httpx.HTTPError, ValueError) as exc:
+                body = response.json()
+                if not isinstance(body, dict):
+                    raise EventSourceError(
+                        f"Pokedata page {page} returned an unexpected root shape"
+                    )
+
+                metadata = body.get("metadata")
+                events = body.get("events")
+                if not isinstance(metadata, dict) or not isinstance(events, list):
+                    raise EventSourceError(
+                        f"Pokedata page {page} returned an unexpected response shape"
+                    )
+
+                total_items = metadata.get("total_items")
+                total_pages = metadata.get("total_pages")
+                current_page = metadata.get("current_page")
+                if not all(
+                    isinstance(value, int) and value >= 0
+                    for value in (total_items, total_pages, current_page)
+                ):
+                    raise EventSourceError(
+                        f"Pokedata page {page} returned invalid pagination metadata"
+                    )
+                if current_page != page:
+                    raise EventSourceError(
+                        f"Pokedata returned page {current_page} when {page} was requested"
+                    )
+
+                rows = [event for event in events if isinstance(event, dict)]
+                return rows, total_items, total_pages
+            except (httpx.HTTPError, ValueError, EventSourceError) as exc:
                 last_error = exc
                 if attempt < self.attempts:
                     await asyncio.sleep(2 ** (attempt - 1))
 
         raise EventSourceError(
-            f"Pokedata request failed after {self.attempts} attempts: {last_error}"
+            f"Pokedata page {page} failed after {self.attempts} attempts: {last_error}"
         )
 
-    async def _fetch_regional(
+    async def _fetch_all_raw(
         self,
         client: httpx.AsyncClient,
         search: EventSearch,
-    ) -> list[tuple[dict[str, Any], Game, bool]]:
-        combined: list[tuple[dict[str, Any], Game, bool]] = []
+    ) -> list[dict[str, Any]]:
+        first, total_items, total_pages = await self._fetch_page(client, search, 1)
+        if total_pages == 0:
+            return []
 
-        for game, path in REGIONAL_STREAMS:
-            body = await self._request_json(
+        events = list(first)
+
+        for page in range(2, total_pages + 1):
+            if self.delay_seconds:
+                await asyncio.sleep(self.delay_seconds)
+
+            rows, next_total, next_pages = await self._fetch_page(
                 client,
-                method="GET",
-                url=self.regional_url(path, search),
+                search,
+                page,
             )
-            if not isinstance(body, list):
+            if next_total != total_items or next_pages != total_pages:
                 raise EventSourceError(
-                    f"Pokedata {game.value} regional feed returned an unexpected shape"
+                    "Pokedata pagination changed while the catalogue was being fetched"
                 )
-            combined.extend(
-                (row, game, False)
-                for row in body
-                if isinstance(row, dict)
-            )
+            events.extend(rows)
 
-        return combined
-
-    def _friendly_query(self, page: int) -> dict[str, Any]:
-        return {
-            "past": "",
-            "country": self.country_code,
-            "city": "",
-            "shop": "",
-            "league": "",
-            "states": "[]",
-            "postcode": "",
-            "cups": "",
-            "challenges": "",
-            "vcups": "",
-            "vchallenges": "",
-            "prereleases": "",
-            "premier": "",
-            "go": "",
-            "gocup": "",
-            "mss": "",
-            "ftcg": "1",
-            "fvg": "1",
-            "fgo": "1",
-            "latitude": "",
-            "longitude": "",
-            "radius": "",
-            "unit": "mi",
-            "width": 1400,
-            "page": page,
+        distinct_ids = {
+            _text(event.get("guid")) or _text(event.get("Guid"))
+            for event in events
+            if _text(event.get("guid")) or _text(event.get("Guid"))
         }
-
-    @staticmethod
-    def _row_date(row: dict[str, Any]) -> date | None:
-        raw = _text(row.get("date"))
-        if not raw:
-            return None
-        try:
-            return date.fromisoformat(raw)
-        except ValueError:
-            return None
-
-    async def _fetch_friendlies(
-        self,
-        client: httpx.AsyncClient,
-        search: EventSearch,
-    ) -> list[tuple[dict[str, Any], Game | None, bool]]:
-        if search.starts_after:
-            start_date = search.starts_after.date()
-        else:
-            start_date = datetime.now(UTC).date()
-        cutoff = start_date + timedelta(days=self.friendly_horizon_days)
-
-        combined: list[tuple[dict[str, Any], Game | None, bool]] = []
-        previous_last: date | None = None
-
-        for page in range(TABLE_PAGE_LIMIT):
-            body = await self._request_json(
-                client,
-                method="POST",
-                url=POKEDATA_TABLE_API,
-                json_body=self._friendly_query(page),
+        if total_items and len(distinct_ids) < total_items * MIN_COMPLETE_SHARE:
+            raise EventSourceError(
+                f"Pokedata returned {len(distinct_ids)} distinct events "
+                f"from {total_items} advertised"
             )
-            if not isinstance(body, list):
-                raise EventSourceError(
-                    f"Pokedata friendly page {page} returned an unexpected shape"
-                )
 
-            rows = [row for row in body if isinstance(row, dict)]
-            if not rows:
-                return combined
+        return events
 
-            first_date = self._row_date(rows[0])
-            last_date = self._row_date(rows[-1])
-            if (
-                previous_last is not None
-                and first_date is not None
-                and first_date < previous_last
-            ):
-                raise EventSourceError(
-                    "Pokedata friendly feed is no longer sorted by date"
-                )
-            if last_date is not None:
-                previous_last = last_date
+    def _keep_event(self, event: EventSnapshot, search: EventSearch) -> bool:
+        league_id = event.upstream_organisation_id
+        if league_id and league_id in self.monitored_league_ids:
+            return True
 
-            for row in rows:
-                row_date = self._row_date(row)
-                if row_date is None or row_date < start_date or row_date > cutoff:
-                    continue
-                combined.append((row, None, True))
+        if event.latitude is None or event.longitude is None:
+            return False
 
-            if len(rows) < TABLE_PAGE_SIZE or (
-                last_date is not None and last_date > cutoff
-            ):
-                return combined
-
-        raise EventSourceError(
-            f"Pokedata friendly feed exceeded {TABLE_PAGE_LIMIT} pages"
+        return (
+            distance_miles(
+                search.latitude,
+                search.longitude,
+                event.latitude,
+                event.longitude,
+            )
+            <= search.radius_miles
         )
-
-    @staticmethod
-    def _deduplicate(
-        rows: list[tuple[dict[str, Any], Game | None, bool]],
-    ) -> list[tuple[dict[str, Any], Game | None, bool]]:
-        seen: set[str] = set()
-        unique: list[tuple[dict[str, Any], Game | None, bool]] = []
-
-        for raw, game_hint, table_friendly in rows:
-            guid = _text(raw.get("guid")) or _text(raw.get("Guid"))
-            if not guid or guid in seen:
-                continue
-            seen.add(guid)
-            unique.append((raw, game_hint, table_friendly))
-
-        return unique
 
     async def fetch_events(self, search: EventSearch) -> list[EventSnapshot]:
         owns_client = self._client is None
-        client = self._client or httpx.AsyncClient(timeout=60)
+        client = self._client or httpx.AsyncClient(timeout=45)
+
         try:
-            regional, friendlies = await asyncio.gather(
-                self._fetch_regional(client, search),
-                self._fetch_friendlies(client, search),
-            )
+            raw_events = await self._fetch_all_raw(client, search)
         finally:
             if owns_client:
                 await client.aclose()
 
         results: list[EventSnapshot] = []
-        for raw, game_hint, table_friendly in self._deduplicate(regional + friendlies):
+        for raw in raw_events:
             try:
                 event = parse_pokedata_event(
                     raw,
-                    game_hint=game_hint,
                     local_timezone=self.local_timezone,
-                    table_friendly=table_friendly,
                 )
             except EventSourceError:
                 continue
 
             if search.starts_after and event.starts_at < search.starts_after:
                 continue
-
-            if event.latitude is not None and event.longitude is not None:
-                if (
-                    distance_miles(
-                        search.latitude,
-                        search.longitude,
-                        event.latitude,
-                        event.longitude,
-                    )
-                    > search.radius_miles
-                ):
-                    continue
-            elif table_friendly:
+            if not self._keep_event(event, search):
                 continue
 
             results.append(event)
