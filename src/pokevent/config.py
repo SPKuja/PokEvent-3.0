@@ -21,12 +21,14 @@ class Settings(BaseSettings):
     # Discord routing and organisation identity use the ID; the name is display only.
     leagues: dict[str, str] = Field(default_factory=dict)
 
-    # Discovery is service-level, not guild-level. It lets PokEvent find nearby
-    # Leagues that are not in the explicit league registry yet.
+    # Service-level discovery area. Discord server owners do not configure this.
     home_name: str = "Swindon"
     home_latitude: float = 51.5615
     home_longitude: float = -1.7855
     default_radius_miles: float = 30.0
+    country_code: str = "GB"
+    local_timezone: str = "Europe/London"
+    friendly_horizon_days: int = 45
 
     event_source: str = "pokedata"
     sync_interval_minutes: int = 180

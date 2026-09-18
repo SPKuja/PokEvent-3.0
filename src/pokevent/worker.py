@@ -16,7 +16,11 @@ settings = get_settings()
 
 def build_source() -> PokedataSource:
     if settings.event_source == "pokedata":
-        return PokedataSource()
+        return PokedataSource(
+            country_code=settings.country_code,
+            local_timezone=settings.local_timezone,
+            friendly_horizon_days=settings.friendly_horizon_days,
+        )
     raise RuntimeError(f"Unsupported POKEVENT_EVENT_SOURCE: {settings.event_source}")
 
 
