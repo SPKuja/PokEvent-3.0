@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import re
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 
@@ -41,9 +42,11 @@ class PokEventBot(commands.Bot):
         intents.guilds = True
         super().__init__(command_prefix=commands.when_mentioned, intents=intents)
         self._synced_guild_ids: set[int] = set()
+        self._global_commands_removed = False
 
     async def setup_hook(self) -> None:
-        await self.tree.sync()
+        if not settings.sync_guild_commands:
+            await self.tree.sync()
         if not publish_event_routes.is_running():
             publish_event_routes.start()
 
@@ -63,12 +66,31 @@ class PokEventBot(commands.Bot):
             guild.name,
         )
 
+    async def _remove_remote_global_commands(self) -> None:
+        if self._global_commands_removed or not settings.sync_guild_commands:
+            return
+
+        global_commands = list(self.tree.get_commands())
+        self.tree.clear_commands(guild=None)
+        await self.tree.sync()
+
+        for command in global_commands:
+            self.tree.add_command(command, override=True)
+
+        self._global_commands_removed = True
+        log.info("removed global command copies while guild-sync mode is enabled")
+
     async def on_ready(self) -> None:
         for guild in self.guilds:
             try:
                 await self._sync_commands_to_guild(guild)
             except discord.HTTPException:
                 log.exception("failed to sync commands to guild=%s", guild.id)
+
+        try:
+            await self._remove_remote_global_commands()
+        except discord.HTTPException:
+            log.exception("failed to remove duplicate global commands")
 
     async def on_guild_join(self, guild: discord.Guild) -> None:
         try:
@@ -190,22 +212,41 @@ def _game_label(game: str | None) -> str | None:
     return labels.get(game.casefold(), game.upper())
 
 
+def _clean_location_value(value: str | None) -> str | None:
+    if not value:
+        return None
+
+    cleaned = re.sub(r"\bNone\b", "", value, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+,", ",", cleaned)
+    cleaned = re.sub(r",\s*,+", ",", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    cleaned = cleaned.strip(" ,")
+    return cleaned or None
+
+
 def _event_location(event: Event) -> str | None:
+    venue = _clean_location_value(event.venue_name)
+    address = _clean_location_value(event.address)
+    city = _clean_location_value(event.city)
+    postcode = _clean_location_value(event.postcode)
+
     lines: list[str] = []
 
-    if event.venue_name:
-        lines.append(event.venue_name)
+    if venue:
+        lines.append(f"**{venue}**")
 
-    locality = ", ".join(
-        part for part in (event.city, event.postcode) if part
-    )
-    if locality and locality not in lines:
-        lines.append(locality)
+    if address:
+        lines.append(address)
 
-    if event.address:
-        address = event.address.strip()
-        if address and address not in lines:
-            lines.append(address)
+    locality = " · ".join(part for part in (city, postcode) if part)
+    if locality:
+        address_text = (address or "").casefold()
+        if not all(
+            part.casefold() in address_text
+            for part in (city, postcode)
+            if part
+        ):
+            lines.append(locality)
 
     return "\n".join(lines) if lines else None
 
@@ -217,57 +258,57 @@ def _event_embed(
     preview: bool = False,
 ) -> discord.Embed:
     official_url = _official_event_url(event)
+    game = _game_label(event.game)
+    location = _event_location(event)
 
-    description_lines = [
-        f"📅 {discord.utils.format_dt(event.starts_at, style='F')}",
-        f"⏳ {discord.utils.format_dt(event.starts_at, style='R')}",
-    ]
+    sections: list[str] = []
+
     if preview:
-        description_lines.insert(0, "🧪 **Test preview — this is not a live announcement.**")
+        sections.extend(
+            [
+                "### 🧪 Test preview",
+                "-# This is not a live announcement.",
+                "",
+            ]
+        )
+
+    event_summary = " · ".join(
+        part
+        for part in (game, event.event_type, league_name)
+        if part
+    )
+    sections.extend(
+        [
+            "### 🎟️ Event",
+            event_summary or "Play! Pokémon event",
+            "",
+            "━━━━━━━━━━━━━━━━━━━━",
+            "",
+            "### 📅 When",
+            discord.utils.format_dt(event.starts_at, style="F"),
+            discord.utils.format_dt(event.starts_at, style="R"),
+        ]
+    )
+
+    if location:
+        sections.extend(
+            [
+                "",
+                "━━━━━━━━━━━━━━━━━━━━",
+                "",
+                "### 📍 Where",
+                location,
+            ]
+        )
 
     embed = discord.Embed(
         title=event.title[:256],
         url=official_url,
-        description="\n".join(description_lines),
+        description="\n".join(sections),
         timestamp=event.starts_at,
     )
-
-    game = _game_label(event.game)
-    if game:
-        embed.add_field(name="🎮 Game", value=game, inline=True)
-
-    if event.event_type:
-        embed.add_field(
-            name="🏆 Event",
-            value=event.event_type[:1024],
-            inline=True,
-        )
-
-    if league_name:
-        embed.add_field(
-            name="🏠 League",
-            value=league_name[:1024],
-            inline=True,
-        )
-
-    location = _event_location(event)
-    if location:
-        embed.add_field(
-            name="📍 Location",
-            value=location[:1024],
-            inline=False,
-        )
-
-    if official_url:
-        embed.add_field(
-            name="🔗 Official details",
-            value=f"[View this event on Pokémon]({official_url})",
-            inline=False,
-        )
-
     embed.set_footer(text="PokEvent 3.0 · Play! Pokémon")
     return embed
-
 
 def _event_link_view(event: Event) -> discord.ui.View | None:
     official_url = _official_event_url(event)
