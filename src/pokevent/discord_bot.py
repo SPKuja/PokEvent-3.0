@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from . import __version__
 from .config import get_settings
@@ -275,6 +275,17 @@ def _event_embed(
 
     sections: list[str] = []
 
+    if event.status == "cancelled":
+        sections.extend(
+            [
+                "### ❌ Event cancelled",
+                "This event is marked as cancelled by the source.",
+                "",
+                "━━━━━━━━━━━━━━━━━━━━",
+                "",
+            ]
+        )
+
     if preview:
         sections.extend(
             [
@@ -313,11 +324,16 @@ def _event_embed(
             ]
         )
 
+    title = event.title
+    if event.status == "cancelled":
+        title = f"❌ CANCELLED · {title}"
+
     embed = discord.Embed(
-        title=event.title[:256],
+        title=title[:256],
         url=official_url,
         description="\n".join(sections),
         timestamp=event.starts_at,
+        colour=discord.Colour.red() if event.status == "cancelled" else None,
     )
     embed.set_footer(text="PokÈvent 3.0 · Play! Pokémon")
     return embed
@@ -341,7 +357,11 @@ def _event_link_view(event: Event) -> discord.ui.View | None:
             )
         )
 
-    if registration_url and registration_url != official_url:
+    if (
+        event.status != "cancelled"
+        and registration_url
+        and registration_url != official_url
+    ):
         view.add_item(
             discord.ui.Button(
                 label="Register",
@@ -352,6 +372,190 @@ def _event_link_view(event: Event) -> discord.ui.View | None:
         )
 
     return view
+
+
+def _event_snapshot(event: Event) -> dict:
+    return {
+        "title": event.title,
+        "game": event.game,
+        "event_type": event.event_type,
+        "status": event.status,
+        "starts_at": int(event.starts_at.timestamp()),
+        "ends_at": int(event.ends_at.timestamp()) if event.ends_at else None,
+        "venue_name": _clean_location_value(event.venue_name),
+        "address": _clean_location_value(event.address),
+        "city": _clean_location_value(event.city),
+        "postcode": _clean_location_value(event.postcode),
+        "registration_url": _safe_http_url(event.registration_url),
+        "source_url": _safe_http_url(event.source_url),
+    }
+
+
+def _snapshot_datetime(value: object) -> str:
+    if isinstance(value, int):
+        return f"<t:{value}:F>"
+    return "Not specified"
+
+
+def _snapshot_text(value: object) -> str:
+    if value is None or value == "":
+        return "Not specified"
+    return str(value)
+
+
+def _event_update_notice(
+    previous: dict | None,
+    event: Event,
+) -> str:
+    current = _event_snapshot(event)
+
+    if previous is None:
+        if event.status == "cancelled":
+            return (
+                "### ❌ Event cancelled\n"
+                "This event has been marked as cancelled. "
+                "The announcement card has been updated."
+            )
+        return (
+            "### 🔄 Event details updated\n"
+            "The organiser has changed this event's details. "
+            "The announcement card has been updated."
+        )
+
+    lines: list[str] = []
+
+    old_status = previous.get("status")
+    status_changed = old_status != current["status"]
+    if status_changed:
+        if current["status"] == "cancelled":
+            lines.append("### ❌ Event cancelled")
+        elif old_status == "cancelled":
+            lines.append("### ✅ Event active again")
+        else:
+            lines.append("### 🔄 Event status updated")
+    else:
+        lines.append("### 🔄 Event details updated")
+
+    changes: list[str] = []
+    if status_changed:
+        changes.append(
+            f"**Status:** {_snapshot_text(old_status).title()} "
+            f"→ {_snapshot_text(current['status']).title()}"
+        )
+
+    if previous.get("title") != current["title"]:
+        changes.append(
+            f"**Name:** {_snapshot_text(previous.get('title'))} "
+            f"→ {_snapshot_text(current['title'])}"
+        )
+
+    if previous.get("starts_at") != current["starts_at"]:
+        changes.append(
+            f"**Date/time:** {_snapshot_datetime(previous.get('starts_at'))} "
+            f"→ {_snapshot_datetime(current['starts_at'])}"
+        )
+
+    if previous.get("venue_name") != current["venue_name"]:
+        changes.append(
+            f"**Venue:** {_snapshot_text(previous.get('venue_name'))} "
+            f"→ {_snapshot_text(current['venue_name'])}"
+        )
+
+    old_address = " · ".join(
+        str(value)
+        for value in (
+            previous.get("address"),
+            previous.get("city"),
+            previous.get("postcode"),
+        )
+        if value
+    )
+    new_address = " · ".join(
+        str(value)
+        for value in (
+            current["address"],
+            current["city"],
+            current["postcode"],
+        )
+        if value
+    )
+    if old_address != new_address:
+        changes.append(
+            f"**Location:** {_snapshot_text(old_address)} "
+            f"→ {_snapshot_text(new_address)}"
+        )
+
+    if previous.get("event_type") != current["event_type"]:
+        changes.append(
+            f"**Event type:** {_snapshot_text(previous.get('event_type'))} "
+            f"→ {_snapshot_text(current['event_type'])}"
+        )
+
+    if previous.get("game") != current["game"]:
+        changes.append(
+            f"**Game:** {_snapshot_text(previous.get('game'))} "
+            f"→ {_snapshot_text(current['game'])}"
+        )
+
+    if previous.get("registration_url") != current["registration_url"]:
+        changes.append("**Registration link:** updated")
+
+    if previous.get("source_url") != current["source_url"]:
+        changes.append("**Official event link:** updated")
+
+    if not changes:
+        changes.append("The source changed event details not shown on the card.")
+
+    lines.extend(changes[:8])
+    lines.append("")
+    lines.append("-# The announcement card above has been updated automatically.")
+
+    notice = "\n".join(lines)
+    return notice[:2000]
+
+
+async def _event_thread(thread_id: str | None) -> discord.Thread | None:
+    if not thread_id:
+        return None
+
+    channel = bot.get_channel(int(thread_id))
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(int(thread_id))
+        except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+            return None
+
+    return channel if isinstance(channel, discord.Thread) else None
+
+
+async def _notify_event_thread(
+    thread_id: str | None,
+    event: Event,
+    content: str,
+) -> bool:
+    thread = await _event_thread(thread_id)
+    if thread is None:
+        return False
+
+    try:
+        if thread.archived and not thread.locked:
+            await thread.edit(
+                archived=False,
+                reason="PokÈvent event details changed",
+            )
+        if thread.name != _thread_name(event):
+            await thread.edit(
+                name=_thread_name(event),
+                reason="PokÈvent event title changed",
+            )
+        await thread.send(
+            content,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        return True
+    except (discord.Forbidden, discord.HTTPException):
+        log.exception("failed to notify event thread=%s", thread_id)
+        return False
 
 
 bot = PokEventBot()
@@ -415,50 +619,56 @@ def _event_cleanup_at(event: Event) -> datetime:
     return event_end + timedelta(hours=settings.event_cleanup_grace_hours)
 
 
-async def _delete_thread(thread_id: str | None) -> None:
+async def _delete_thread(thread_id: str | None) -> bool:
     if not thread_id:
-        return
+        return True
 
     channel = bot.get_channel(int(thread_id))
     if channel is None:
         try:
             channel = await bot.fetch_channel(int(thread_id))
         except discord.NotFound:
-            return
+            return True
         except (discord.Forbidden, discord.HTTPException):
             log.exception("failed to fetch event thread=%s for cleanup", thread_id)
-            return
+            return False
 
     if not isinstance(channel, discord.Thread):
-        return
+        return True
 
     try:
-        await channel.delete(reason="PokEvent event has finished")
+        await channel.delete(reason="PokÈvent event has finished")
+        return True
     except discord.NotFound:
-        return
+        return True
     except (discord.Forbidden, discord.HTTPException):
         log.exception("failed to delete event thread=%s", thread_id)
+        return False
 
 
 async def _delete_published_message(
     published: PublishedMessage,
-) -> None:
-    await _delete_thread(published.thread_id)
+) -> bool:
+    thread_deleted = await _delete_thread(published.thread_id)
 
     channel = await _discord_channel(published.channel_id)
     if channel is None:
-        return
+        return False
 
     try:
         message = await channel.fetch_message(int(published.message_id))
         await message.delete()
+        message_deleted = True
     except discord.NotFound:
-        return
+        message_deleted = True
     except (discord.Forbidden, discord.HTTPException):
         log.exception(
             "failed to delete expired event message=%s",
             published.message_id,
         )
+        message_deleted = False
+
+    return thread_deleted and message_deleted
 
 
 def _summary_event_line(event: Event) -> str:
@@ -815,6 +1025,7 @@ async def _backfill_target(guild_id: str, target: str, count: int) -> int:
                     message_id=str(message.id),
                     thread_id=str(thread.id) if thread is not None else None,
                     last_content_hash=event.content_hash,
+                    last_event_snapshot=_event_snapshot(event),
                 )
             )
             posted += 1
@@ -839,15 +1050,20 @@ async def _publish_route(route: Route) -> None:
         )
         league_name = league.name if league is not None else None
 
+        published_event_ids = select(PublishedMessage.event_id).where(
+            PublishedMessage.route_id == route.id
+        )
         events = list(
             (
                 await session.scalars(
                     select(Event)
                     .where(
-                        Event.status == "active",
-                        Event.starts_at >= now,
                         Event.upstream_organisation_id
                         == route.upstream_organisation_id,
+                        or_(
+                            Event.starts_at >= now,
+                            Event.id.in_(published_event_ids),
+                        ),
                     )
                     .order_by(Event.starts_at)
                 )
@@ -863,6 +1079,8 @@ async def _publish_route(route: Route) -> None:
             )
 
             if published is None:
+                if event.starts_at < now or event.status != "active":
+                    continue
                 if event_card_type(event.event_type) not in enabled_card_types:
                     continue
                 if not route.announce_new or event.first_seen_at <= route.baseline_at:
@@ -900,6 +1118,7 @@ async def _publish_route(route: Route) -> None:
                         message_id=str(message.id),
                         thread_id=str(thread.id) if thread is not None else None,
                         last_content_hash=event.content_hash,
+                        last_event_snapshot=_event_snapshot(event),
                     )
                 )
                 continue
@@ -914,13 +1133,30 @@ async def _publish_route(route: Route) -> None:
             if channel is None:
                 continue
 
+            previous_snapshot = published.last_event_snapshot
+            notice = _event_update_notice(previous_snapshot, event)
+
             try:
                 message = await channel.fetch_message(int(published.message_id))
                 await message.edit(
                     embed=_event_embed(event, league_name),
                     view=_event_link_view(event),
                 )
+
+                if published.thread_id is None and settings.create_event_threads:
+                    thread = await _create_event_thread(message, event)
+                    published.thread_id = (
+                        str(thread.id) if thread is not None else None
+                    )
+
+                await _notify_event_thread(
+                    published.thread_id,
+                    event,
+                    notice,
+                )
             except discord.NotFound:
+                if not await _delete_thread(published.thread_id):
+                    continue
                 try:
                     message = await channel.send(
                         embed=_event_embed(event, league_name),
@@ -934,6 +1170,11 @@ async def _publish_route(route: Route) -> None:
                 published.thread_id = (
                     str(thread.id) if thread is not None else None
                 )
+                await _notify_event_thread(
+                    published.thread_id,
+                    event,
+                    notice,
+                )
             except (discord.Forbidden, discord.HTTPException):
                 log.exception(
                     "failed to update event=%s route=%s",
@@ -943,6 +1184,7 @@ async def _publish_route(route: Route) -> None:
                 continue
 
             published.last_content_hash = event.content_hash
+            published.last_event_snapshot = _event_snapshot(event)
 
         await session.commit()
 
@@ -984,13 +1226,15 @@ async def cleanup_expired_event_posts() -> None:
             if _event_cleanup_at(event) <= now:
                 expired.append(published)
 
+        removed = 0
         for published in expired:
-            await _delete_published_message(published)
-            await session.delete(published)
+            if await _delete_published_message(published):
+                await session.delete(published)
+                removed += 1
 
-        if expired:
+        if removed:
             await session.commit()
-            log.info("removed %s expired Discord event posts", len(expired))
+            log.info("removed %s expired Discord event posts", removed)
 
 
 @tasks.loop(minutes=5)
@@ -2720,10 +2964,10 @@ class SetupWizard(discord.ui.View):
         self.stop()
 
 
-@pokevent.command(name="status", description="Show the PokEvent service status.")
+@pokevent.command(name="status", description="Show the PokÈvent service status.")
 async def status(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(
-        f"PokEvent {__version__} is online.",
+        f"PokÈvent {__version__} is online.",
         ephemeral=True,
     )
 
@@ -2817,8 +3061,7 @@ async def events(
                 await session.commit()
                 await interaction.response.send_message(
                     "This server does not have a default League yet. "
-                    "A server administrator can run /pokevent setup or "
-                    "set one with /league default.",
+                    "A server administrator can configure one with /pokevent setup.",
                     ephemeral=True,
                 )
                 return
@@ -3297,7 +3540,7 @@ async def on_app_command_error(
     if isinstance(error, app_commands.MissingPermissions):
         await _send_error(
             interaction,
-            "You need the Administrator permission to change PokEvent configuration.",
+            "You need the Administrator permission to change PokÈvent configuration.",
         )
         return
     raise error

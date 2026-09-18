@@ -186,6 +186,7 @@ class PublishedMessage(Base):
     message_id: Mapped[str] = mapped_column(String(32), nullable=False)
     thread_id: Mapped[str | None] = mapped_column(String(32))
     last_content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    last_event_snapshot: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow

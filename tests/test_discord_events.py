@@ -4,6 +4,8 @@ from pokevent.discord_bot import (
     EVENTS_PAGE_SIZE,
     _event_cleanup_at,
     _event_embed,
+    _event_snapshot,
+    _event_update_notice,
     _event_link_view,
     _event_location,
     _official_event_url,
@@ -195,3 +197,65 @@ def test_admin_commands_are_consolidated_under_pokevent_setup() -> None:
     pokevent = top_level["pokevent"]
     subcommands = {command.name for command in pokevent.commands}
     assert subcommands == {"setup", "status"}
+
+
+
+def test_cancelled_event_card_is_visibly_marked_and_not_registerable() -> None:
+    event = _event(0)
+    event.status = "cancelled"
+    event.registration_url = "https://example.com/register"
+    event.source_url = (
+        "https://www.pokemon.com/us/pokemon-trainer-club/"
+        "play-pokemon-tournaments/26-09-CANCELLED/"
+    )
+
+    embed = _event_embed(event, "Example League")
+    view = _event_link_view(event)
+    description = embed.description or ""
+
+    assert embed.title is not None
+    assert embed.title.startswith("❌ CANCELLED")
+    assert "### ❌ Event cancelled" in description
+    assert view is not None
+    assert len(view.children) == 1
+    assert view.children[0].label == "View on Pokémon"
+
+
+def test_event_update_notice_lists_meaningful_changes() -> None:
+    event = _event(0)
+    event.status = "active"
+    event.venue_name = "Old Venue"
+    previous = _event_snapshot(event)
+
+    event.starts_at = datetime(2026, 9, 21, 18, 30, tzinfo=UTC)
+    event.venue_name = "New Venue"
+    event.address = "1 Example Street"
+    event.city = "Exampletown"
+
+    notice = _event_update_notice(previous, event)
+
+    assert "### 🔄 Event details updated" in notice
+    assert "**Date/time:**" in notice
+    assert "**Venue:** Old Venue → New Venue" in notice
+    assert "**Location:** Not specified → 1 Example Street · Exampletown" in notice
+
+
+def test_event_update_notice_calls_out_cancellation() -> None:
+    event = _event(0)
+    event.status = "active"
+    previous = _event_snapshot(event)
+
+    event.status = "cancelled"
+    notice = _event_update_notice(previous, event)
+
+    assert notice.startswith("### ❌ Event cancelled")
+
+
+def test_event_update_notice_handles_legacy_publication_without_snapshot() -> None:
+    event = _event(0)
+    event.status = "cancelled"
+
+    notice = _event_update_notice(None, event)
+
+    assert "### ❌ Event cancelled" in notice
+    assert "announcement card has been updated" in notice
