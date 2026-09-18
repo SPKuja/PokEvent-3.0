@@ -5,8 +5,10 @@ import pytest
 
 from pokevent.domain import EventSearch, Game
 from pokevent.routing import RouteCriteria, matches_route
-from pokevent.sources.pokedata import (\n    PokedataSource,\n    parse_pokedata_event,\n)
-
+from pokevent.sources.pokedata import (
+    PokedataSource,
+    parse_pokedata_event,
+)
 
 SWINDON_SHAPE_FIXTURE = {
     "type": "League Challenge",
@@ -78,9 +80,7 @@ async def test_source_pages_then_filters_locally() -> None:
         page = int(str(request.url).rsplit("/", 1)[-1])
         return httpx.Response(200, json=page_1 if page == 1 else page_2)
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler)
-    ) as client:
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         source = PokedataSource(client=client, delay_seconds=0)
         events = await source.fetch_events(
             EventSearch(
