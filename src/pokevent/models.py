@@ -98,6 +98,35 @@ class GuildConfig(Base):
     home_latitude: Mapped[float | None] = mapped_column(Float)
     home_longitude: Mapped[float | None] = mapped_column(Float)
     default_radius_miles: Mapped[float | None] = mapped_column(Float)
+
+    default_league_id: Mapped[str | None] = mapped_column(String(255))
+    default_channel_id: Mapped[str | None] = mapped_column(String(32))
+    all_channel_id: Mapped[str | None] = mapped_column(String(32))
+    leagues_seeded: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class GuildLeague(Base):
+    __tablename__ = "guild_leagues"
+    __table_args__ = (
+        UniqueConstraint("guild_id", "name_key", name="uq_guild_league_name"),
+        UniqueConstraint("guild_id", "league_id", name="uq_guild_league_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    guild_id: Mapped[str] = mapped_column(
+        ForeignKey("guild_configs.guild_id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    name_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    league_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    channel_id: Mapped[str | None] = mapped_column(String(32))
+    origin: Mapped[str] = mapped_column(String(32), default="server")
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
@@ -106,6 +135,13 @@ class GuildConfig(Base):
 
 class Route(Base):
     __tablename__ = "routes"
+    __table_args__ = (
+        UniqueConstraint(
+            "guild_id",
+            "upstream_organisation_id",
+            name="uq_route_guild_league",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     guild_id: Mapped[str] = mapped_column(
@@ -127,6 +163,7 @@ class Route(Base):
     announce_new: Mapped[bool] = mapped_column(Boolean, default=True)
     announce_updates: Mapped[bool] = mapped_column(Boolean, default=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    baseline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
