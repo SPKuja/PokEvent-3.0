@@ -1790,46 +1790,12 @@ async def eventchannel_set(
     assert interaction.guild_id is not None
     assert interaction.guild is not None
 
-    bot_member = interaction.guild.me
-    if bot_member is None:
-        await _send_error(interaction, "I could not resolve my server permissions.")
-        return
-
-    resolved_channel = interaction.guild.get_channel(channel.id)
+    resolved_channel, error = await _validate_announcement_channel(
+        interaction.guild,
+        channel.id,
+    )
     if resolved_channel is None:
-        try:
-            resolved_channel = await bot.fetch_channel(channel.id)
-        except (discord.Forbidden, discord.NotFound, discord.HTTPException):
-            await _send_error(
-                interaction,
-                "I could not access that channel. Please check my channel permissions.",
-            )
-            return
-
-    if not isinstance(resolved_channel, discord.TextChannel):
-        await _send_error(
-            interaction,
-            "Please choose a normal text channel for PokEvent announcements.",
-        )
-        return
-
-    permissions = resolved_channel.permissions_for(bot_member)
-    required_permissions = {
-        "View Channel": permissions.view_channel,
-        "Send Messages": permissions.send_messages,
-        "Create Public Threads": permissions.create_public_threads,
-        "Manage Threads": permissions.manage_threads,
-        "Manage Messages": permissions.manage_messages,
-    }
-    missing_permissions = [
-        name for name, allowed in required_permissions.items() if not allowed
-    ]
-    if missing_permissions:
-        await _send_error(
-            interaction,
-            f"I need these permissions in {resolved_channel.mention}: "
-            f"**{', '.join(missing_permissions)}**.",
-        )
+        await _send_error(interaction, error or "Invalid announcement channel.")
         return
 
     try:
@@ -1892,18 +1858,35 @@ async def eventchannel_test(
 
             if league is None:
                 config = await ensure_guild_config(session, guild_id)
+                routes = list(
+                    (
+                        await session.scalars(
+                            select(Route).where(
+                                Route.guild_id == guild_id,
+                                Route.enabled.is_(True),
+                                Route.channel_id == config.all_channel_id,
+                                Route.upstream_organisation_id
+                                != config.default_league_id,
+                            )
+                        )
+                    ).all()
+                )
+                league_ids = [
+                    route.upstream_organisation_id
+                    for route in routes
+                    if route.upstream_organisation_id is not None
+                ]
                 statement = (
                     select(Event)
                     .where(
                         Event.starts_at >= datetime.now(UTC),
                         Event.status == "active",
-                        Event.upstream_organisation_id
-                        != config.default_league_id,
+                        Event.upstream_organisation_id.in_(league_ids),
                     )
                     .order_by(Event.starts_at)
                     .limit(1)
                 )
-                league_name = "Configured League"
+                league_name = None
             else:
                 statement = (
                     select(Event)
@@ -1918,6 +1901,14 @@ async def eventchannel_test(
                 league_name = league.name
 
             event = await session.scalar(statement)
+            if event is not None and league_name is None:
+                configured = await session.scalar(
+                    select(GuildLeague).where(
+                        GuildLeague.guild_id == guild_id,
+                        GuildLeague.league_id == event.upstream_organisation_id,
+                    )
+                )
+                league_name = configured.name if configured is not None else None
             await session.commit()
 
         if event is None:
