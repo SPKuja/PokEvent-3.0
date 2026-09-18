@@ -1,44 +1,94 @@
 # Event source research
 
-## Known Swindon identity fixture
+## Known Swindon event
 
-Pokemon League Swindon's known Play! Pokemon League ID is **2012924**.
+Pokémon League Swindon's Play! Pokémon League ID is **2012924**.
 
-A known League Challenge is scheduled for **20 September 2026**. This is used
-only as an identity/date/type fixture while developing ingestion. Synthetic
-fixture IDs and times in tests are explicitly marked as fixtures and are not
-claimed to be the live event's official tournament ID or start time.
+The known League Challenge on **20 September 2026** was verified against the
+live structured source:
 
-## Structured mirror findings
+- League ID: `2012924`
+- event GUID: `7a4dd5c6-fe4e-499e-ac99-612319c4d229`
+- tournament display ID: `26-09-021255`
+- title: `Pokemon League Swindon - September League Challenge`
+- venue: `THE INCREDIBLE COMIC SHOP`
+- city: Swindon
+- listed start: `2026-09-20 11:00:00`
 
-Pokedata's event API mirrors sanctioned Play! Pokemon records and exposes a
-useful structured shape including:
-
-- `guid` / `Guid`: event GUID
-- `Display_id`: official tournament display ID
-- `league`: Play! Pokemon League ID
-- `type`: League Cup / League Challenge / Prerelease
-- `Products`: TCG/VG/GO product
-- `Start_date`, registration timestamps
-- venue/address/coordinates
-- official `pokemon_url`
-- registration/admission fields
-
-The API v2 response is paginated under `metadata` + `events`.
-
-PokEvent uses `league` as the upstream organisation routing identity. For
-Pokemon League Swindon that means a Discord route can target `2012924`
-without relying on the text "Pokemon League Swindon".
+This proves League identity and venue identity must remain separate.
 
 ## Source policy
 
-Play! Pokemon remains the authoritative publisher.
+Play! Pokémon remains the authoritative publisher. PokEvent consumes structured
+records mirrored by Pokédata because the rendered official Event Locator is
+protected against reliable server-side access. Every mirrored record retains
+its official Pokémon event URL and Play! Pokémon identifiers.
 
-The official Event Locator is currently protected in a way that makes direct
-server-side inspection unreliable. PokEvent therefore keeps the official
-adapter isolated and adds a Pokedata adapter as a structured mirror/fallback.
-Every mirrored event retains the official pokemon.com URL and upstream IDs.
+Pokédata API v2 is the supported integration surface:
 
-Pokedata's own geographic/date query filters have been reported unreliable by
-other open-source consumers, so PokEvent fetches validated pages and applies
-distance/date filtering locally.
+`https://pokedata.ovh/events/apiv2/`
+
+The older `tableapi` endpoints are not used by PokEvent. Pokédata has announced
+that tableapi is being retired.
+
+## API v2 contract
+
+The API-v2 help page documents:
+
+- pagination with `_page/<n>`;
+- TCG event filters with `_tcg/cups/challenges/pre`;
+- VG event filters with `_vg/cups/challenges`;
+- GO event filters with `_go/cups/challenges`;
+- country filtering with `_country/<alpha-2>`;
+- `_start/YYYY-MM-DD` and `_end/YYYY-MM-DD`;
+- state and city filters;
+- latitude/longitude/radius filters;
+- ICS output.
+
+Unknown path filters are silently ignored with HTTP 200, so PokEvent validates
+pagination metadata and response completeness instead of assuming a successful
+HTTP response means a requested filter was honoured.
+
+## Full-coverage strategy
+
+PokEvent deliberately does **not** ask upstream only for Cups, Challenges or
+Prereleases.
+
+It queries the complete bounded country/date catalogue:
+
+`_country/GB/_start/<date>/_end/<date>/_page/<n>`
+
+That catalogue contains premier and non-premier records together, including:
+
+- TCG League Cups and Challenges;
+- TCG Prereleases;
+- VGC League Cups and Challenges;
+- Pokémon GO League Cups and Challenges;
+- normal/friendly TCG League listings;
+- normal/friendly VGC League listings;
+- normal/friendly GO League listings;
+- any new event types that Pokédata/Play! Pokémon adds later.
+
+Unknown event types are retained rather than discarded.
+
+The documented API-v2 radius filter currently returns empty results for valid
+Swindon searches, so PokEvent applies geographic filtering locally.
+
+## League registry
+
+Known communities are configured by stable Play! Pokémon League ID:
+
+```env
+POKEVENT_LEAGUES={"2012924":"Pokémon League Swindon"}
+```
+
+The ID is the identity. The friendly text is presentation only.
+
+Configured League IDs bypass the local discovery-radius cut. This is
+intentional: if Pokémon League Swindon runs an event at a different or distant
+venue, it is still an event belonging to League `2012924` and should remain in
+that League's feed.
+
+Events belonging to other Leagues are retained when they fall inside the
+service-level discovery radius, allowing PokEvent to surface the wider local
+community without asking Discord server owners to configure coordinates.

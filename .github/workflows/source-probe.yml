@@ -1,22 +1,36 @@
-name: Source Probe
+name: Source Smoke Test
 
 on:
-  push:
-    branches:
-      - feature/play-pokemon-ingestion
-    paths:
-      - "scripts/probe_event.py"
-      - "src/pokevent/sources/pokedata.py"
-      - ".github/workflows/source-probe.yml"
   workflow_dispatch:
+    inputs:
+      league:
+        description: Play! Pokémon League ID
+        required: true
+        default: "2012924"
+      date:
+        description: Event date (YYYY-MM-DD)
+        required: true
+        default: "2026-09-20"
+      latitude:
+        description: Discovery centre latitude
+        required: true
+        default: "51.5615"
+      longitude:
+        description: Discovery centre longitude
+        required: true
+        default: "-1.7855"
+      radius:
+        description: Discovery radius in miles
+        required: true
+        default: "50"
 
 permissions:
   contents: read
 
 jobs:
-  swindon-known-event:
+  event-source:
     runs-on: ubuntu-latest
-    continue-on-error: true
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
@@ -31,11 +45,11 @@ jobs:
       - name: Install
         run: python -m pip install -e .
 
-      - name: Probe Pokemon League Swindon
+      - name: Probe event source
         run: |
           python scripts/probe_event.py \
-            --league 2012924 \
-            --date 2026-09-20 \
-            --lat 51.5615 \
-            --lon -1.7855 \
-            --radius 50
+            --league "${{ inputs.league }}" \
+            --date "${{ inputs.date }}" \
+            --lat "${{ inputs.latitude }}" \
+            --lon "${{ inputs.longitude }}" \
+            --radius "${{ inputs.radius }}"
