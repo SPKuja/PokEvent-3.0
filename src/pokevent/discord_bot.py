@@ -1090,10 +1090,443 @@ def _admin_only(command):
     return app_commands.checks.has_permissions(administrator=True)(command)
 
 
+async def _validate_announcement_channel(
+    guild: discord.Guild,
+    channel_id: int,
+) -> tuple[discord.TextChannel | None, str | None]:
+    bot_member = guild.me
+    if bot_member is None:
+        return None, "I could not resolve my server permissions."
+
+    resolved = guild.get_channel(channel_id)
+    if resolved is None:
+        try:
+            resolved = await bot.fetch_channel(channel_id)
+        except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+            return (
+                None,
+                "I could not access that channel. Please check my channel permissions.",
+            )
+
+    if not isinstance(resolved, discord.TextChannel):
+        return None, "Please choose a normal text channel for PokEvent announcements."
+
+    permissions = resolved.permissions_for(bot_member)
+    required_permissions = {
+        "View Channel": permissions.view_channel,
+        "Send Messages": permissions.send_messages,
+        "Create Public Threads": permissions.create_public_threads,
+        "Manage Threads": permissions.manage_threads,
+        "Manage Messages": permissions.manage_messages,
+    }
+    missing = [name for name, allowed in required_permissions.items() if not allowed]
+    if missing:
+        return (
+            None,
+            f"I need these permissions in {resolved.mention}: "
+            f"**{', '.join(missing)}**.",
+        )
+
+    return resolved, None
+
+
+class SetupLeagueSelect(discord.ui.Select):
+    def __init__(self, wizard: "SetupWizard") -> None:
+        self.wizard = wizard
+        options = [
+            discord.SelectOption(
+                label=name[:100],
+                value=league_id,
+                description=f"League ID {league_id}"[:100],
+                default=league_id == wizard.default_league_id,
+            )
+            for league_id, name in wizard.leagues.items()
+        ][:25]
+        super().__init__(
+            placeholder="Choose this server's default League",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self.wizard.choose_default_league(interaction, self.values[0])
+
+
+class SetupChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self, wizard: "SetupWizard", purpose: str) -> None:
+        self.wizard = wizard
+        self.purpose = purpose
+        placeholder = (
+            "Choose the default League announcement channel"
+            if purpose == "default"
+            else "Choose the channel for other configured Leagues"
+        )
+        super().__init__(
+            placeholder=placeholder,
+            channel_types=[discord.ChannelType.text],
+            min_values=1,
+            max_values=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        selected = self.values[0]
+        await self.wizard.choose_channel(
+            interaction,
+            self.purpose,
+            selected.id,
+        )
+
+
+class SetupActionButton(discord.ui.Button):
+    def __init__(
+        self,
+        wizard: "SetupWizard",
+        action: str,
+        label: str,
+        style: discord.ButtonStyle,
+    ) -> None:
+        self.wizard = wizard
+        self.action = action
+        super().__init__(label=label, style=style)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self.wizard.handle_action(interaction, self.action)
+
+
+class SetupBackfillButton(discord.ui.Button):
+    def __init__(self, wizard: "SetupWizard", count: int) -> None:
+        self.wizard = wizard
+        self.count = count
+        label = "No full cards" if count == 0 else f"Post next {count}"
+        style = (
+            discord.ButtonStyle.secondary
+            if count == 0
+            else discord.ButtonStyle.primary
+        )
+        super().__init__(label=label, style=style)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self.wizard.finish(interaction, self.count)
+
+
+class SetupWizard(discord.ui.View):
+    def __init__(
+        self,
+        *,
+        invoker_id: int,
+        guild_id: str,
+        leagues: list[GuildLeague],
+        default_league_id: str | None,
+        default_channel_id: str | None,
+        all_channel_id: str | None,
+    ) -> None:
+        super().__init__(timeout=600)
+        self.invoker_id = invoker_id
+        self.guild_id = guild_id
+        self.leagues = {league.league_id: league.name for league in leagues}
+        self.default_league_id = default_league_id
+        self.default_channel_id = default_channel_id
+        self.all_channel_id = all_channel_id
+        self.show_league_step()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.invoker_id:
+            return True
+        await interaction.response.send_message(
+            "Only the administrator who started this setup can use these controls.",
+            ephemeral=True,
+        )
+        return False
+
+    def _reset(self) -> None:
+        self.clear_items()
+
+    def show_league_step(self) -> None:
+        self._reset()
+        self.add_item(SetupLeagueSelect(self))
+
+    def show_default_channel_step(self) -> None:
+        self._reset()
+        self.add_item(SetupChannelSelect(self, "default"))
+
+    def show_other_channel_step(self) -> None:
+        self._reset()
+        self.add_item(
+            SetupActionButton(
+                self,
+                "same",
+                "Use the same channel",
+                discord.ButtonStyle.primary,
+            )
+        )
+        self.add_item(
+            SetupActionButton(
+                self,
+                "different",
+                "Choose another channel",
+                discord.ButtonStyle.secondary,
+            )
+        )
+        self.add_item(
+            SetupActionButton(
+                self,
+                "none",
+                "Don't auto-post other Leagues",
+                discord.ButtonStyle.secondary,
+            )
+        )
+
+    def show_other_channel_picker(self) -> None:
+        self._reset()
+        self.add_item(SetupChannelSelect(self, "all"))
+
+    def show_backfill_step(self) -> None:
+        self._reset()
+        for count in (0, 3, 5, 10):
+            self.add_item(SetupBackfillButton(self, count))
+
+    def _league_name(self) -> str:
+        if self.default_league_id is None:
+            return "Not set"
+        return self.leagues.get(self.default_league_id, self.default_league_id)
+
+    async def choose_default_league(
+        self,
+        interaction: discord.Interaction,
+        league_id: str,
+    ) -> None:
+        async with SessionFactory() as session:
+            chosen = await set_default_league(session, self.guild_id, league_id)
+            await session.commit()
+
+        self.default_league_id = chosen.league_id
+        self.show_default_channel_step()
+        await interaction.response.edit_message(
+            content=(
+                "## PokEvent setup · 2/4\n"
+                f"Default League: **{chosen.name}**\n\n"
+                "Choose the channel where this League's event cards and pinned "
+                "upcoming-events summary should appear."
+            ),
+            view=self,
+        )
+
+    async def choose_channel(
+        self,
+        interaction: discord.Interaction,
+        purpose: str,
+        channel_id: int,
+    ) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "This setup must be run inside a server.",
+                ephemeral=True,
+            )
+            return
+
+        channel, error = await _validate_announcement_channel(
+            interaction.guild,
+            channel_id,
+        )
+        if channel is None:
+            await interaction.response.send_message(
+                error or "Invalid channel.",
+                ephemeral=True,
+            )
+            return
+
+        async with SessionFactory() as session:
+            await set_event_channel(
+                session,
+                self.guild_id,
+                purpose,
+                str(channel.id),
+            )
+            await session.commit()
+
+        if purpose == "default":
+            self.default_channel_id = str(channel.id)
+            self.show_other_channel_step()
+            await interaction.response.edit_message(
+                content=(
+                    "## PokEvent setup · 3/4\n"
+                    f"Default League: **{self._league_name()}**\n"
+                    f"Default channel: {channel.mention}\n\n"
+                    "What should PokEvent do with your **other configured Leagues**? "
+                    "You can still give individual Leagues their own channel later."
+                ),
+                view=self,
+            )
+            return
+
+        self.all_channel_id = str(channel.id)
+        self.show_backfill_step()
+        await interaction.response.edit_message(
+            content=(
+                "## PokEvent setup · 4/4\n"
+                f"Other configured Leagues will use {channel.mention}.\n\n"
+                "The pinned summary will make all existing upcoming events visible. "
+                "How many already-known **default League** events should also be "
+                "posted now as full cards with discussion threads?"
+            ),
+            view=self,
+        )
+
+    async def handle_action(
+        self,
+        interaction: discord.Interaction,
+        action: str,
+    ) -> None:
+        if action == "different":
+            self.show_other_channel_picker()
+            await interaction.response.edit_message(
+                content=(
+                    "## PokEvent setup · 3/4\n"
+                    "Choose the channel for all non-default configured Leagues. "
+                    "Specific League channel overrides can be added later."
+                ),
+                view=self,
+            )
+            return
+
+        async with SessionFactory() as session:
+            if action == "same":
+                if self.default_channel_id is None:
+                    await interaction.response.send_message(
+                        "Choose the default channel first.",
+                        ephemeral=True,
+                    )
+                    return
+                await set_event_channel(
+                    session,
+                    self.guild_id,
+                    "all",
+                    self.default_channel_id,
+                )
+                self.all_channel_id = self.default_channel_id
+            elif action == "none":
+                await clear_event_channel(session, self.guild_id, "all")
+                self.all_channel_id = None
+            else:
+                await interaction.response.send_message(
+                    "Unknown setup action.",
+                    ephemeral=True,
+                )
+                return
+            await session.commit()
+
+        self.show_backfill_step()
+        await interaction.response.edit_message(
+            content=(
+                "## PokEvent setup · 4/4\n"
+                "The pinned summary will make existing upcoming events visible "
+                "without flooding the channel.\n\n"
+                "How many already-known **default League** events should also be "
+                "posted now as full cards with discussion threads?"
+            ),
+            view=self,
+        )
+
+    async def finish(
+        self,
+        interaction: discord.Interaction,
+        backfill_count: int,
+    ) -> None:
+        await interaction.response.defer()
+        await refresh_guild_summary_messages(self.guild_id)
+
+        posted = 0
+        if backfill_count:
+            try:
+                posted = await _backfill_target(
+                    self.guild_id,
+                    "default",
+                    backfill_count,
+                )
+            except ValueError:
+                log.exception("setup backfill failed for guild=%s", self.guild_id)
+
+        default_channel = (
+            f"<#{self.default_channel_id}>"
+            if self.default_channel_id
+            else "Not configured"
+        )
+        other_channel = (
+            f"<#{self.all_channel_id}>"
+            if self.all_channel_id
+            else "No automatic posts"
+        )
+
+        await interaction.edit_original_response(
+            content=(
+                "## ✅ PokEvent setup complete\n"
+                f"**Default League:** {self._league_name()}\n"
+                f"**Default channel:** {default_channel}\n"
+                f"**Other configured Leagues:** {other_channel}\n"
+                f"**Existing full cards posted:** {posted}\n\n"
+                "The pinned summary now shows existing upcoming events. "
+                "New events will be announced automatically.\n\n"
+                "Add another League any time with /league add."
+            ),
+            view=None,
+        )
+        self.stop()
+
+
 @pokevent.command(name="status", description="Show the PokEvent service status.")
 async def status(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(
         f"PokEvent {__version__} is online.",
+        ephemeral=True,
+    )
+
+
+@pokevent.command(
+    name="setup",
+    description="Run the guided PokEvent setup for this server.",
+)
+@_admin_only
+async def pokevent_setup(interaction: discord.Interaction) -> None:
+    assert interaction.guild_id is not None
+
+    guild_id = str(interaction.guild_id)
+    async with SessionFactory() as session:
+        config = await ensure_guild_config(session, guild_id)
+        leagues = await guild_leagues(session, guild_id)
+        await session.commit()
+
+    if not leagues:
+        await interaction.response.send_message(
+            "There are no Leagues configured yet. Add one with /league add, "
+            "then run /pokevent setup again.",
+            ephemeral=True,
+        )
+        return
+
+    wizard = SetupWizard(
+        invoker_id=interaction.user.id,
+        guild_id=guild_id,
+        leagues=leagues,
+        default_league_id=config.default_league_id,
+        default_channel_id=config.default_channel_id,
+        all_channel_id=config.all_channel_id,
+    )
+
+    league_lines = "\n".join(
+        f"• **{league.name}** · League ID {league.league_id}"
+        for league in leagues[:10]
+    )
+    if len(leagues) > 10:
+        league_lines += f"\n• …and {len(leagues) - 10} more"
+
+    await interaction.response.send_message(
+        "## PokEvent setup · 1/4\n"
+        "Choose this server's **default League**. This is what /events shows "
+        "when no League is specified.\n\n"
+        f"{league_lines}\n\n"
+        "-# Additional Leagues can be added later with /league add.",
+        view=wizard,
         ephemeral=True,
     )
 
@@ -1202,6 +1635,7 @@ async def league_add(
         await _send_error(interaction, str(exc))
         return
 
+    await refresh_guild_summary_messages(str(interaction.guild_id))
     await interaction.response.send_message(
         f"Added **{added.name}** ({added.league_id}). "
         "Its events will be picked up on the next catalogue sync.",
@@ -1226,6 +1660,7 @@ async def league_remove(interaction: discord.Interaction, league: str) -> None:
         await _send_error(interaction, str(exc))
         return
 
+    await refresh_guild_summary_messages(str(interaction.guild_id))
     await interaction.response.send_message(
         f"Removed **{removed.name}** ({removed.league_id}).",
         ephemeral=True,
@@ -1262,6 +1697,7 @@ async def league_rename(
         await _send_error(interaction, str(exc))
         return
 
+    await refresh_guild_summary_messages(str(interaction.guild_id))
     await interaction.response.send_message(
         f"League renamed to **{renamed.name}** ({renamed.league_id}).",
         ephemeral=True,
@@ -1293,6 +1729,7 @@ async def league_default(interaction: discord.Interaction, league: str) -> None:
         await _send_error(interaction, str(exc))
         return
 
+    await refresh_guild_summary_messages(str(interaction.guild_id))
     await interaction.response.send_message(
         f"**{chosen.name}** ({chosen.league_id}) is now this server's default League.",
         ephemeral=True,

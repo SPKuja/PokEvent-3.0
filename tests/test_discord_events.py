@@ -7,10 +7,11 @@ from pokevent.discord_bot import (
     _event_link_view,
     _event_location,
     _official_event_url,
+    _summary_embed,
     _thread_name,
     event_page_content,
 )
-from pokevent.models import Event
+from pokevent.models import Event, GuildLeague
 
 
 def _event(index: int) -> Event:
@@ -142,3 +143,40 @@ def test_event_cleanup_prefers_known_end_time(monkeypatch) -> None:
         30,
         tzinfo=UTC,
     )
+
+
+
+def test_summary_only_contains_configured_leagues() -> None:
+    swindon = GuildLeague(
+        guild_id="guild-1",
+        name="Pokémon League Swindon",
+        name_key="pokémon league swindon",
+        league_id="2012924",
+        origin="service",
+    )
+    bath = GuildLeague(
+        guild_id="guild-1",
+        name="Bath TCG",
+        name_key="bath tcg",
+        league_id="5683200",
+        origin="service",
+    )
+
+    swindon_event = _event(0)
+    swindon_event.upstream_organisation_id = "2012924"
+    swindon_event.game = "tcg"
+
+    unrelated = _event(1)
+    unrelated.title = "Unrelated nearby event"
+    unrelated.upstream_organisation_id = "9999999"
+
+    embed = _summary_embed(
+        [swindon, bath],
+        [swindon_event, unrelated],
+        "2012924",
+    )
+    rendered = str(embed.to_dict())
+
+    assert "Pokémon League Swindon" in rendered
+    assert "Bath TCG" in rendered
+    assert "Unrelated nearby event" not in rendered
