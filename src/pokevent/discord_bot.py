@@ -1129,6 +1129,1054 @@ async def _validate_announcement_channel(
     return resolved, None
 
 
+async def _setup_dashboard_content(
+    guild_id: str,
+    *,
+    notice: str | None = None,
+) -> str:
+    async with SessionFactory() as session:
+        config = await ensure_guild_config(session, guild_id)
+        leagues = await guild_leagues(session, guild_id)
+        await session.commit()
+
+    default_name = "Not set"
+    for league in leagues:
+        if league.league_id == config.default_league_id:
+            default_name = league.name
+            break
+
+    default_channel = (
+        f"<#{config.default_channel_id}>"
+        if config.default_channel_id
+        else "Not configured"
+    )
+    other_channel = (
+        f"<#{config.all_channel_id}>"
+        if config.all_channel_id
+        else "No automatic posts"
+    )
+    ready = bool(config.default_league_id and config.default_channel_id)
+    status = "✅ Ready" if ready else "⚠️ Setup incomplete"
+
+    league_names = ", ".join(league.name for league in leagues[:6]) or "None"
+    if len(leagues) > 6:
+        league_names += f" +{len(leagues) - 6} more"
+
+    lines = [
+        "## ⚙️ PokEvent Admin",
+        f"**Status:** {status}",
+        f"**Default League:** {default_name}",
+        f"**Default channel:** {default_channel}",
+        f"**Other configured Leagues:** {other_channel}",
+        f"**Configured Leagues:** {len(leagues)} · {league_names}",
+        "",
+        "Use the controls below to manage PokEvent without filling the slash-command list.",
+    ]
+    if notice:
+        lines.extend(["", f"**{notice}**"])
+    return "\n".join(lines)
+
+
+async def _preview_event_target(
+    guild_id: str,
+    target: str,
+) -> tuple[discord.TextChannel, Event, str | None]:
+    async with SessionFactory() as session:
+        league, channel_id = await resolve_event_channel(
+            session,
+            guild_id,
+            target,
+        )
+        if channel_id is None:
+            raise ValueError("That target does not have an announcement channel configured.")
+
+        if league is None:
+            config = await ensure_guild_config(session, guild_id)
+            routes = list(
+                (
+                    await session.scalars(
+                        select(Route).where(
+                            Route.guild_id == guild_id,
+                            Route.enabled.is_(True),
+                            Route.channel_id == channel_id,
+                            Route.upstream_organisation_id
+                            != config.default_league_id,
+                        )
+                    )
+                ).all()
+            )
+            league_ids = [
+                route.upstream_organisation_id
+                for route in routes
+                if route.upstream_organisation_id is not None
+            ]
+            statement = (
+                select(Event)
+                .where(
+                    Event.starts_at >= datetime.now(UTC),
+                    Event.status == "active",
+                    Event.upstream_organisation_id.in_(league_ids),
+                )
+                .order_by(Event.starts_at)
+                .limit(1)
+            )
+            league_name = None
+        else:
+            statement = (
+                select(Event)
+                .where(
+                    Event.starts_at >= datetime.now(UTC),
+                    Event.status == "active",
+                    Event.upstream_organisation_id == league.league_id,
+                )
+                .order_by(Event.starts_at)
+                .limit(1)
+            )
+            league_name = league.name
+
+        event = await session.scalar(statement)
+        if event is None:
+            raise ValueError("I could not find an upcoming event to use as a preview.")
+
+        if league_name is None:
+            configured = await session.scalar(
+                select(GuildLeague).where(
+                    GuildLeague.guild_id == guild_id,
+                    GuildLeague.league_id == event.upstream_organisation_id,
+                )
+            )
+            league_name = configured.name if configured is not None else None
+
+        await session.commit()
+
+    channel = await _discord_channel(channel_id)
+    if channel is None:
+        raise ValueError("I could not access the configured announcement channel.")
+
+    return channel, event, league_name
+
+
+class SetupDashboardButton(discord.ui.Button):
+    def __init__(
+        self,
+        dashboard: SetupDashboardView,
+        action: str,
+        label: str,
+        style: discord.ButtonStyle = discord.ButtonStyle.secondary,
+        *,
+        row: int | None = None,
+    ) -> None:
+        self.dashboard = dashboard
+        self.action = action
+        super().__init__(label=label, style=style, row=row)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self.dashboard.handle_action(interaction, self.action)
+
+
+class SetupDashboardView(discord.ui.View):
+    def __init__(self, *, invoker_id: int, guild_id: str) -> None:
+        super().__init__(timeout=600)
+        self.invoker_id = invoker_id
+        self.guild_id = guild_id
+        self.add_item(
+            SetupDashboardButton(
+                self,
+                "guided",
+                "Guided Setup",
+                discord.ButtonStyle.primary,
+                row=0,
+            )
+        )
+        self.add_item(SetupDashboardButton(self, "add", "Add League", row=0))
+        self.add_item(SetupDashboardButton(self, "manage", "Manage Leagues", row=0))
+        self.add_item(SetupDashboardButton(self, "channels", "Channels", row=0))
+        self.add_item(SetupDashboardButton(self, "posts", "Event Posts", row=1))
+        self.add_item(SetupDashboardButton(self, "refresh", "Refresh Summary", row=1))
+        self.add_item(SetupDashboardButton(self, "close", "Close", row=1))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.invoker_id:
+            return True
+        await interaction.response.send_message(
+            "Only the administrator who opened this setup can use these controls.",
+            ephemeral=True,
+        )
+        return False
+
+    async def handle_action(
+        self,
+        interaction: discord.Interaction,
+        action: str,
+    ) -> None:
+        if action == "add":
+            await interaction.response.send_modal(
+                AddLeagueModal(
+                    invoker_id=self.invoker_id,
+                    guild_id=self.guild_id,
+                )
+            )
+            return
+
+        if action == "manage":
+            async with SessionFactory() as session:
+                config = await ensure_guild_config(session, self.guild_id)
+                leagues = await guild_leagues(session, self.guild_id)
+                await session.commit()
+            if not leagues:
+                await interaction.response.send_message(
+                    "No Leagues are configured yet. Use **Add League** first.",
+                    ephemeral=True,
+                )
+                return
+            view = LeagueManagerView(
+                invoker_id=self.invoker_id,
+                guild_id=self.guild_id,
+                leagues=leagues,
+                default_league_id=config.default_league_id,
+            )
+            await interaction.response.edit_message(
+                content=view.content(),
+                view=view,
+            )
+            return
+
+        if action == "channels":
+            async with SessionFactory() as session:
+                config = await ensure_guild_config(session, self.guild_id)
+                leagues = await guild_leagues(session, self.guild_id)
+                await session.commit()
+            if not leagues:
+                await interaction.response.send_message(
+                    "Add at least one League before configuring channels.",
+                    ephemeral=True,
+                )
+                return
+            view = ChannelManagerView(
+                invoker_id=self.invoker_id,
+                guild_id=self.guild_id,
+                leagues=leagues,
+                default_league_id=config.default_league_id,
+            )
+            await interaction.response.edit_message(
+                content=await view.content(),
+                view=view,
+            )
+            return
+
+        if action == "posts":
+            async with SessionFactory() as session:
+                leagues = await guild_leagues(session, self.guild_id)
+                await session.commit()
+            view = PostToolsView(
+                invoker_id=self.invoker_id,
+                guild_id=self.guild_id,
+                leagues=leagues,
+            )
+            await interaction.response.edit_message(
+                content=view.content(),
+                view=view,
+            )
+            return
+
+        if action == "refresh":
+            await interaction.response.defer()
+            refreshed = await refresh_guild_summary_messages(self.guild_id)
+            await interaction.edit_original_response(
+                content=await _setup_dashboard_content(
+                    self.guild_id,
+                    notice=f"Summary refresh complete · {refreshed} message(s) changed.",
+                ),
+                view=self,
+            )
+            return
+
+        if action == "guided":
+            async with SessionFactory() as session:
+                config = await ensure_guild_config(session, self.guild_id)
+                leagues = await guild_leagues(session, self.guild_id)
+                await session.commit()
+            if not leagues:
+                await interaction.response.send_modal(
+                    AddLeagueModal(
+                        invoker_id=self.invoker_id,
+                        guild_id=self.guild_id,
+                    )
+                )
+                return
+            wizard = SetupWizard(
+                invoker_id=self.invoker_id,
+                guild_id=self.guild_id,
+                leagues=leagues,
+                default_league_id=config.default_league_id,
+                default_channel_id=config.default_channel_id,
+                all_channel_id=config.all_channel_id,
+            )
+            league_lines = "\n".join(
+                f"• **{league.name}** · League ID {league.league_id}"
+                for league in leagues[:10]
+            )
+            await interaction.response.edit_message(
+                content=(
+                    "## PokEvent setup · 1/4\n"
+                    "Choose this server's **default League**. This is what /events "
+                    "shows when no League is specified.\n\n"
+                    f"{league_lines}"
+                ),
+                view=wizard,
+            )
+            return
+
+        if action == "close":
+            await interaction.response.edit_message(
+                content="PokEvent setup closed. Run /pokevent setup to reopen it.",
+                view=None,
+            )
+            self.stop()
+            return
+
+
+class AddLeagueModal(discord.ui.Modal, title="Add Play! Pokémon League"):
+    name_input = discord.ui.TextInput(
+        label="League name",
+        placeholder="e.g. Bath TCG",
+        max_length=100,
+    )
+    league_id_input = discord.ui.TextInput(
+        label="League ID",
+        placeholder="e.g. 5683200",
+        max_length=64,
+    )
+
+    def __init__(self, *, invoker_id: int, guild_id: str) -> None:
+        super().__init__()
+        self.invoker_id = invoker_id
+        self.guild_id = guild_id
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        try:
+            async with SessionFactory() as session:
+                added = await add_guild_league(
+                    session,
+                    self.guild_id,
+                    self.name_input.value,
+                    self.league_id_input.value,
+                )
+                await session.commit()
+            await refresh_guild_summary_messages(self.guild_id)
+        except ValueError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+
+        view = SetupDashboardView(
+            invoker_id=self.invoker_id,
+            guild_id=self.guild_id,
+        )
+        await interaction.response.edit_message(
+            content=await _setup_dashboard_content(
+                self.guild_id,
+                notice=f"Added {added.name} ({added.league_id}).",
+            ),
+            view=view,
+        )
+
+
+class LeagueManagerSelect(discord.ui.Select):
+    def __init__(self, manager: LeagueManagerView) -> None:
+        self.manager = manager
+        options = [
+            discord.SelectOption(
+                label=league.name[:100],
+                value=league.league_id,
+                description=f"League ID {league.league_id}"[:100],
+                default=league.league_id == manager.selected_league_id,
+            )
+            for league in manager.leagues
+        ][:25]
+        super().__init__(
+            placeholder="Choose a League to manage",
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        self.manager.selected_league_id = self.values[0]
+        self.manager.rebuild()
+        await interaction.response.edit_message(
+            content=self.manager.content(),
+            view=self.manager,
+        )
+
+
+class LeagueManagerButton(discord.ui.Button):
+    def __init__(
+        self,
+        manager: LeagueManagerView,
+        action: str,
+        label: str,
+        style: discord.ButtonStyle = discord.ButtonStyle.secondary,
+    ) -> None:
+        self.manager = manager
+        self.action = action
+        super().__init__(label=label, style=style, row=1)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self.manager.handle_action(interaction, self.action)
+
+
+class LeagueManagerView(discord.ui.View):
+    def __init__(
+        self,
+        *,
+        invoker_id: int,
+        guild_id: str,
+        leagues: list[GuildLeague],
+        default_league_id: str | None,
+    ) -> None:
+        super().__init__(timeout=600)
+        self.invoker_id = invoker_id
+        self.guild_id = guild_id
+        self.leagues = leagues
+        self.default_league_id = default_league_id
+        self.selected_league_id = (
+            default_league_id
+            if default_league_id in {league.league_id for league in leagues}
+            else leagues[0].league_id
+        )
+        self.rebuild()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.invoker_id:
+            return True
+        await interaction.response.send_message(
+            "Only the administrator who opened this setup can use these controls.",
+            ephemeral=True,
+        )
+        return False
+
+    def selected(self) -> GuildLeague:
+        return next(
+            league
+            for league in self.leagues
+            if league.league_id == self.selected_league_id
+        )
+
+    def content(self) -> str:
+        league = self.selected()
+        marker = " · **Default**" if league.league_id == self.default_league_id else ""
+        origin = "PokEvent default" if league.origin == "service" else "Server-added"
+        return (
+            "## 🏠 Manage Leagues\n"
+            f"**{league.name}** · ID {league.league_id}{marker}\n"
+            f"-# {origin}\n\n"
+            "Set it as the default, rename it, remove it, or go back."
+        )
+
+    def rebuild(self) -> None:
+        self.clear_items()
+        self.add_item(LeagueManagerSelect(self))
+        self.add_item(
+            LeagueManagerButton(
+                self,
+                "default",
+                "Set Default",
+                discord.ButtonStyle.primary,
+            )
+        )
+        self.add_item(LeagueManagerButton(self, "rename", "Rename"))
+        self.add_item(
+            LeagueManagerButton(
+                self,
+                "remove",
+                "Remove",
+                discord.ButtonStyle.danger,
+            )
+        )
+        self.add_item(LeagueManagerButton(self, "back", "Back"))
+
+    async def handle_action(
+        self,
+        interaction: discord.Interaction,
+        action: str,
+    ) -> None:
+        league = self.selected()
+
+        if action == "rename":
+            await interaction.response.send_modal(
+                RenameLeagueModal(
+                    invoker_id=self.invoker_id,
+                    guild_id=self.guild_id,
+                    league_id=league.league_id,
+                    current_name=league.name,
+                )
+            )
+            return
+
+        if action == "remove":
+            view = RemoveLeagueConfirmView(
+                invoker_id=self.invoker_id,
+                guild_id=self.guild_id,
+                league_id=league.league_id,
+                league_name=league.name,
+            )
+            await interaction.response.edit_message(
+                content=(
+                    "## ⚠️ Remove League\n"
+                    f"Remove **{league.name}** ({league.league_id}) from this server?\n\n"
+                    "Its automatic route will also be removed. Existing Discord "
+                    "event posts are not bulk-deleted by this action."
+                ),
+                view=view,
+            )
+            return
+
+        if action == "default":
+            async with SessionFactory() as session:
+                chosen = await set_default_league(
+                    session,
+                    self.guild_id,
+                    league.league_id,
+                )
+                await session.commit()
+            self.default_league_id = chosen.league_id
+            await refresh_guild_summary_messages(self.guild_id)
+            self.rebuild()
+            await interaction.response.edit_message(
+                content=self.content(),
+                view=self,
+            )
+            return
+
+        if action == "back":
+            view = SetupDashboardView(
+                invoker_id=self.invoker_id,
+                guild_id=self.guild_id,
+            )
+            await interaction.response.edit_message(
+                content=await _setup_dashboard_content(self.guild_id),
+                view=view,
+            )
+
+
+class RenameLeagueModal(discord.ui.Modal, title="Rename League"):
+    new_name_input = discord.ui.TextInput(
+        label="New League name",
+        max_length=100,
+    )
+
+    def __init__(
+        self,
+        *,
+        invoker_id: int,
+        guild_id: str,
+        league_id: str,
+        current_name: str,
+    ) -> None:
+        super().__init__()
+        self.invoker_id = invoker_id
+        self.guild_id = guild_id
+        self.league_id = league_id
+        self.new_name_input.default = current_name
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        try:
+            async with SessionFactory() as session:
+                renamed = await rename_guild_league(
+                    session,
+                    self.guild_id,
+                    self.league_id,
+                    self.new_name_input.value,
+                )
+                await session.commit()
+            await refresh_guild_summary_messages(self.guild_id)
+        except ValueError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+
+        view = SetupDashboardView(
+            invoker_id=self.invoker_id,
+            guild_id=self.guild_id,
+        )
+        await interaction.response.edit_message(
+            content=await _setup_dashboard_content(
+                self.guild_id,
+                notice=f"Renamed League to {renamed.name}.",
+            ),
+            view=view,
+        )
+
+
+class RemoveLeagueConfirmView(discord.ui.View):
+    def __init__(
+        self,
+        *,
+        invoker_id: int,
+        guild_id: str,
+        league_id: str,
+        league_name: str,
+    ) -> None:
+        super().__init__(timeout=300)
+        self.invoker_id = invoker_id
+        self.guild_id = guild_id
+        self.league_id = league_id
+        self.league_name = league_name
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.invoker_id:
+            return True
+        await interaction.response.send_message(
+            "Only the administrator who opened this setup can use these controls.",
+            ephemeral=True,
+        )
+        return False
+
+    @discord.ui.button(label="Remove League", style=discord.ButtonStyle.danger)
+    async def confirm(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        del button
+        try:
+            async with SessionFactory() as session:
+                await remove_guild_league(
+                    session,
+                    self.guild_id,
+                    self.league_id,
+                )
+                await session.commit()
+            await refresh_guild_summary_messages(self.guild_id)
+        except ValueError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+
+        view = SetupDashboardView(
+            invoker_id=self.invoker_id,
+            guild_id=self.guild_id,
+        )
+        await interaction.response.edit_message(
+            content=await _setup_dashboard_content(
+                self.guild_id,
+                notice=f"Removed {self.league_name}.",
+            ),
+            view=view,
+        )
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        del button
+        view = SetupDashboardView(
+            invoker_id=self.invoker_id,
+            guild_id=self.guild_id,
+        )
+        await interaction.response.edit_message(
+            content=await _setup_dashboard_content(self.guild_id),
+            view=view,
+        )
+        self.stop()
+
+
+class ChannelTargetSelect(discord.ui.Select):
+    def __init__(self, manager: ChannelManagerView) -> None:
+        self.manager = manager
+        options = [
+            discord.SelectOption(
+                label="Default League",
+                value="default",
+                default=manager.selected_target == "default",
+            ),
+            discord.SelectOption(
+                label="All non-default Leagues",
+                value="all",
+                default=manager.selected_target == "all",
+            ),
+        ]
+        options.extend(
+            discord.SelectOption(
+                label=league.name[:100],
+                value=league.league_id,
+                description="Specific League override",
+                default=manager.selected_target == league.league_id,
+            )
+            for league in manager.leagues
+            if league.league_id != manager.default_league_id
+        )
+        super().__init__(
+            placeholder="Choose what channel to configure",
+            min_values=1,
+            max_values=1,
+            options=options[:25],
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        self.manager.selected_target = self.values[0]
+        self.manager.rebuild()
+        await interaction.response.edit_message(
+            content=await self.manager.content(),
+            view=self.manager,
+        )
+
+
+class ChannelPicker(discord.ui.ChannelSelect):
+    def __init__(self, manager: ChannelManagerView) -> None:
+        self.manager = manager
+        super().__init__(
+            placeholder="Choose a new announcement channel",
+            channel_types=[discord.ChannelType.text],
+            min_values=1,
+            max_values=1,
+            row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            return
+
+        channel, error = await _validate_announcement_channel(
+            interaction.guild,
+            self.values[0].id,
+        )
+        if channel is None:
+            await interaction.response.send_message(
+                error or "Invalid channel.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            async with SessionFactory() as session:
+                await set_event_channel(
+                    session,
+                    self.manager.guild_id,
+                    self.manager.selected_target,
+                    str(channel.id),
+                )
+                await session.commit()
+            await refresh_guild_summary_messages(self.manager.guild_id)
+        except ValueError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+
+        await interaction.response.edit_message(
+            content=await self.manager.content(
+                notice=f"Channel updated to {channel.mention}.",
+            ),
+            view=self.manager,
+        )
+
+
+class ChannelManagerButton(discord.ui.Button):
+    def __init__(
+        self,
+        manager: ChannelManagerView,
+        action: str,
+        label: str,
+        style: discord.ButtonStyle = discord.ButtonStyle.secondary,
+    ) -> None:
+        self.manager = manager
+        self.action = action
+        super().__init__(label=label, style=style, row=2)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self.manager.handle_action(interaction, self.action)
+
+
+class ChannelManagerView(discord.ui.View):
+    def __init__(
+        self,
+        *,
+        invoker_id: int,
+        guild_id: str,
+        leagues: list[GuildLeague],
+        default_league_id: str | None,
+    ) -> None:
+        super().__init__(timeout=600)
+        self.invoker_id = invoker_id
+        self.guild_id = guild_id
+        self.leagues = leagues
+        self.default_league_id = default_league_id
+        self.selected_target = "default"
+        self.rebuild()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.invoker_id:
+            return True
+        await interaction.response.send_message(
+            "Only the administrator who opened this setup can use these controls.",
+            ephemeral=True,
+        )
+        return False
+
+    def rebuild(self) -> None:
+        self.clear_items()
+        self.add_item(ChannelTargetSelect(self))
+        self.add_item(ChannelPicker(self))
+        self.add_item(
+            ChannelManagerButton(
+                self,
+                "clear",
+                "Clear Channel",
+                discord.ButtonStyle.danger,
+            )
+        )
+        self.add_item(ChannelManagerButton(self, "back", "Back"))
+
+    async def content(self, notice: str | None = None) -> str:
+        try:
+            async with SessionFactory() as session:
+                league, channel_id = await resolve_event_channel(
+                    session,
+                    self.guild_id,
+                    self.selected_target,
+                )
+                await session.commit()
+            label = (
+                "All non-default Leagues"
+                if self.selected_target == "all"
+                else league.name if league is not None else self.selected_target
+            )
+        except ValueError:
+            channel_id = None
+            label = self.selected_target
+
+        current = f"<#{channel_id}>" if channel_id else "Not configured"
+        lines = [
+            "## 📣 Announcement Channels",
+            f"**Target:** {label}",
+            f"**Current/effective channel:** {current}",
+            "",
+            "Choose a text channel below, clear the current setting, or select another target.",
+        ]
+        if notice:
+            lines.extend(["", f"**{notice}**"])
+        return "\n".join(lines)
+
+    async def handle_action(
+        self,
+        interaction: discord.Interaction,
+        action: str,
+    ) -> None:
+        if action == "clear":
+            try:
+                async with SessionFactory() as session:
+                    await clear_event_channel(
+                        session,
+                        self.guild_id,
+                        self.selected_target,
+                    )
+                    await session.commit()
+                await refresh_guild_summary_messages(self.guild_id)
+            except ValueError as exc:
+                await interaction.response.send_message(str(exc), ephemeral=True)
+                return
+            await interaction.response.edit_message(
+                content=await self.content(notice="Channel setting cleared."),
+                view=self,
+            )
+            return
+
+        if action == "back":
+            view = SetupDashboardView(
+                invoker_id=self.invoker_id,
+                guild_id=self.guild_id,
+            )
+            await interaction.response.edit_message(
+                content=await _setup_dashboard_content(self.guild_id),
+                view=view,
+            )
+
+
+class PostTargetSelect(discord.ui.Select):
+    def __init__(self, tools: PostToolsView) -> None:
+        self.tools = tools
+        options = [
+            discord.SelectOption(
+                label="Default League",
+                value="default",
+                default=tools.selected_target == "default",
+            ),
+            discord.SelectOption(
+                label="All non-default Leagues",
+                value="all",
+                default=tools.selected_target == "all",
+            ),
+        ]
+        options.extend(
+            discord.SelectOption(
+                label=league.name[:100],
+                value=league.league_id,
+                default=tools.selected_target == league.league_id,
+            )
+            for league in tools.leagues
+        )
+        super().__init__(
+            placeholder="Choose which events to work with",
+            min_values=1,
+            max_values=1,
+            options=options[:25],
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        self.tools.selected_target = self.values[0]
+        self.tools.rebuild()
+        await interaction.response.edit_message(
+            content=self.tools.content(),
+            view=self.tools,
+        )
+
+
+class PostToolsButton(discord.ui.Button):
+    def __init__(
+        self,
+        tools: PostToolsView,
+        action: str,
+        label: str,
+        style: discord.ButtonStyle = discord.ButtonStyle.secondary,
+    ) -> None:
+        self.tools = tools
+        self.action = action
+        super().__init__(label=label, style=style, row=1)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self.tools.handle_action(interaction, self.action)
+
+
+class PostToolsView(discord.ui.View):
+    def __init__(
+        self,
+        *,
+        invoker_id: int,
+        guild_id: str,
+        leagues: list[GuildLeague],
+    ) -> None:
+        super().__init__(timeout=600)
+        self.invoker_id = invoker_id
+        self.guild_id = guild_id
+        self.leagues = leagues
+        self.selected_target = "default"
+        self.notice: str | None = None
+        self.rebuild()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.invoker_id:
+            return True
+        await interaction.response.send_message(
+            "Only the administrator who opened this setup can use these controls.",
+            ephemeral=True,
+        )
+        return False
+
+    def target_label(self) -> str:
+        if self.selected_target == "default":
+            return "Default League"
+        if self.selected_target == "all":
+            return "All non-default Leagues"
+        for league in self.leagues:
+            if league.league_id == self.selected_target:
+                return league.name
+        return self.selected_target
+
+    def content(self) -> str:
+        lines = [
+            "## 🧪 Event Post Tools",
+            f"**Target:** {self.target_label()}",
+            "",
+            "**Test Post** sends one preview without creating a discussion thread.",
+            "**Backfill** publishes already-known events as full cards with threads.",
+        ]
+        if self.notice:
+            lines.extend(["", f"**{self.notice}**"])
+        return "\n".join(lines)
+
+    def rebuild(self) -> None:
+        self.clear_items()
+        self.add_item(PostTargetSelect(self))
+        self.add_item(
+            PostToolsButton(
+                self,
+                "test",
+                "Test Post",
+                discord.ButtonStyle.primary,
+            )
+        )
+        self.add_item(PostToolsButton(self, "backfill3", "Backfill 3"))
+        self.add_item(PostToolsButton(self, "backfill5", "Backfill 5"))
+        self.add_item(PostToolsButton(self, "backfill10", "Backfill 10"))
+        self.add_item(PostToolsButton(self, "back", "Back"))
+
+    async def handle_action(
+        self,
+        interaction: discord.Interaction,
+        action: str,
+    ) -> None:
+        if action == "back":
+            view = SetupDashboardView(
+                invoker_id=self.invoker_id,
+                guild_id=self.guild_id,
+            )
+            await interaction.response.edit_message(
+                content=await _setup_dashboard_content(self.guild_id),
+                view=view,
+            )
+            return
+
+        if action == "test":
+            try:
+                channel, event, league_name = await _preview_event_target(
+                    self.guild_id,
+                    self.selected_target,
+                )
+                await channel.send(
+                    embed=_event_embed(event, league_name, preview=True),
+                    view=_event_link_view(event),
+                )
+            except ValueError as exc:
+                self.notice = str(exc)
+            else:
+                self.notice = f"Test card sent to {channel.mention}."
+            self.rebuild()
+            await interaction.response.edit_message(
+                content=self.content(),
+                view=self,
+            )
+            return
+
+        count = {
+            "backfill3": 3,
+            "backfill5": 5,
+            "backfill10": 10,
+        }.get(action)
+        if count is None:
+            return
+
+        try:
+            posted = await _backfill_target(
+                self.guild_id,
+                self.selected_target,
+                count,
+            )
+            await refresh_guild_summary_messages(self.guild_id)
+        except ValueError as exc:
+            self.notice = str(exc)
+        else:
+            self.notice = f"Published {posted} existing event card(s)."
+
+        self.rebuild()
+        await interaction.response.edit_message(
+            content=self.content(),
+            view=self,
+        )
+
+
 class SetupLeagueSelect(discord.ui.Select):
     def __init__(self, wizard: SetupWizard) -> None:
         self.wizard = wizard
@@ -1353,7 +2401,7 @@ class SetupWizard(discord.ui.View):
                     f"Default League: **{self._league_name()}**\n"
                     f"Default channel: {channel.mention}\n\n"
                     "What should PokEvent do with your **other configured Leagues**? "
-                    "You can still give individual Leagues their own channel later."
+                    "You can still give individual Leagues their own channel later from **Channels**."
                 ),
                 view=self,
             )
@@ -1446,29 +2494,19 @@ class SetupWizard(discord.ui.View):
             except ValueError:
                 log.exception("setup backfill failed for guild=%s", self.guild_id)
 
-        default_channel = (
-            f"<#{self.default_channel_id}>"
-            if self.default_channel_id
-            else "Not configured"
+        dashboard = SetupDashboardView(
+            invoker_id=self.invoker_id,
+            guild_id=self.guild_id,
         )
-        other_channel = (
-            f"<#{self.all_channel_id}>"
-            if self.all_channel_id
-            else "No automatic posts"
-        )
-
         await interaction.edit_original_response(
-            content=(
-                "## ✅ PokEvent setup complete\n"
-                f"**Default League:** {self._league_name()}\n"
-                f"**Default channel:** {default_channel}\n"
-                f"**Other configured Leagues:** {other_channel}\n"
-                f"**Existing full cards posted:** {posted}\n\n"
-                "The pinned summary now shows existing upcoming events. "
-                "New events will be announced automatically.\n\n"
-                "Add another League any time with /league add."
+            content=await _setup_dashboard_content(
+                self.guild_id,
+                notice=(
+                    "Guided setup complete · "
+                    f"{posted} existing full event card(s) posted."
+                ),
             ),
-            view=None,
+            view=dashboard,
         )
         self.stop()
 
@@ -1483,7 +2521,7 @@ async def status(interaction: discord.Interaction) -> None:
 
 @pokevent.command(
     name="setup",
-    description="Run the guided PokEvent setup for this server.",
+    description="Open the PokEvent setup and administration dashboard.",
 )
 @_admin_only
 async def pokevent_setup(interaction: discord.Interaction) -> None:
@@ -1496,9 +2534,28 @@ async def pokevent_setup(interaction: discord.Interaction) -> None:
         await session.commit()
 
     if not leagues:
+        dashboard = SetupDashboardView(
+            invoker_id=interaction.user.id,
+            guild_id=guild_id,
+        )
         await interaction.response.send_message(
-            "There are no Leagues configured yet. Add one with /league add, "
-            "then run /pokevent setup again.",
+            await _setup_dashboard_content(
+                guild_id,
+                notice="Add a League to begin setup.",
+            ),
+            view=dashboard,
+            ephemeral=True,
+        )
+        return
+
+    if config.default_league_id and config.default_channel_id:
+        dashboard = SetupDashboardView(
+            invoker_id=interaction.user.id,
+            guild_id=guild_id,
+        )
+        await interaction.response.send_message(
+            await _setup_dashboard_content(guild_id),
+            view=dashboard,
             ephemeral=True,
         )
         return
@@ -1524,7 +2581,7 @@ async def pokevent_setup(interaction: discord.Interaction) -> None:
         "Choose this server's **default League**. This is what /events shows "
         "when no League is specified.\n\n"
         f"{league_lines}\n\n"
-        "-# Additional Leagues can be added later with /league add.",
+        "-# You can manage additional Leagues from this dashboard after setup.",
         view=wizard,
         ephemeral=True,
     )
@@ -2038,8 +3095,6 @@ async def on_app_command_error(
 
 
 bot.tree.add_command(pokevent)
-bot.tree.add_command(league_group)
-bot.tree.add_command(eventchannel_group)
 
 
 async def run_bot() -> None:

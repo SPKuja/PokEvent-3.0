@@ -9,6 +9,7 @@ from pokevent.discord_bot import (
     _official_event_url,
     _summary_embed,
     _thread_name,
+    bot,
     event_page_content,
 )
 from pokevent.models import Event, GuildLeague
@@ -180,3 +181,17 @@ def test_summary_only_contains_configured_leagues() -> None:
     assert "Pokémon League Swindon" in rendered
     assert "Bath TCG" in rendered
     assert "Unrelated nearby event" not in rendered
+
+
+
+def test_admin_commands_are_consolidated_under_pokevent_setup() -> None:
+    top_level = {command.name: command for command in bot.tree.get_commands()}
+
+    assert "events" in top_level
+    assert "pokevent" in top_level
+    assert "league" not in top_level
+    assert "eventchannel" not in top_level
+
+    pokevent = top_level["pokevent"]
+    subcommands = {command.name for command in pokevent.commands}
+    assert subcommands == {"setup", "status"}
