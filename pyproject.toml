@@ -27,6 +27,7 @@ dev = ["pytest>=8.4,<9", "pytest-asyncio>=1.1,<2", "ruff>=0.12,<1"]
 [project.scripts]
 pokevent-web = "pokevent.web:main"
 pokevent-bot = "pokevent.discord_bot:main"
+pokevent-worker = "pokevent.worker:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pokevent"]

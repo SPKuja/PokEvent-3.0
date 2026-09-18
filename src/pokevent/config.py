@@ -10,7 +10,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    database_url: str = "sqlite+aiosqlite:////data/pokevent.db"
+    database_url: str = "sqlite+aiosqlite:///./data/pokevent.db"
     discord_token: str | None = None
     public_base_url: str = "http://localhost:8080"
 
@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     home_longitude: float = -1.7855
     default_radius_miles: float = 30.0
 
+    event_source: str = "pokedata"
     sync_interval_minutes: int = 180
 
 
