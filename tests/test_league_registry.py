@@ -1,8 +1,9 @@
+from datetime import UTC, datetime
+
+from pokevent import worker
 from pokevent.config import Settings
 from pokevent.domain import EventSnapshot, Game
 from pokevent.worker import apply_league_registry
-import pokevent.worker as worker
-from datetime import UTC, datetime
 
 
 def test_league_registry_is_json_environment_mapping(monkeypatch) -> None:
