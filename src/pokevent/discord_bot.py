@@ -1186,7 +1186,6 @@ async def _setup_dashboard_content(
         f"**Configured Leagues:** {len(leagues)} · {league_names}",
         f"**Announcement card types:** {len(enabled_card_types)}/{len(CARD_EVENT_TYPES)} enabled",
         "",
-        "Use the controls below to manage PokÈvent without filling the slash-command list.",
     ]
     if notice:
         lines.extend(["", f"**{notice}**"])
