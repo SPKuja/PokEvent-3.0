@@ -1,14 +1,32 @@
 services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-pokevent}
+      POSTGRES_USER: ${POSTGRES_USER:-pokevent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pokevent-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pokevent} -d ${POSTGRES_DB:-pokevent}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   web:
     build: .
     command: pokevent-web
     restart: unless-stopped
     env_file:
       - .env
-    volumes:
-      - pokevent-data:/data
+    environment:
+      POKEVENT_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-pokevent}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-pokevent}
     ports:
       - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
 
   bot:
     build: .
@@ -16,10 +34,11 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-    volumes:
-      - pokevent-data:/data
+    environment:
+      POKEVENT_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-pokevent}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-pokevent}
     depends_on:
-      - web
+      db:
+        condition: service_healthy
 
 volumes:
-  pokevent-data:
+  pokevent-postgres:
