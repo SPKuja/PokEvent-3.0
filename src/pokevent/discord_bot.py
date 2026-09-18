@@ -619,7 +619,7 @@ async def league_list(interaction: discord.Interaction) -> None:
 async def eventchannel_set(
     interaction: discord.Interaction,
     target: str,
-    channel: discord.TextChannel,
+    channel: app_commands.AppCommandChannel,
 ) -> None:
     assert interaction.guild_id is not None
     assert interaction.guild is not None
@@ -629,11 +629,30 @@ async def eventchannel_set(
         await _send_error(interaction, "I could not resolve my server permissions.")
         return
 
-    permissions = channel.permissions_for(bot_member)
+    resolved_channel = interaction.guild.get_channel(channel.id)
+    if resolved_channel is None:
+        try:
+            resolved_channel = await bot.fetch_channel(channel.id)
+        except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+            await _send_error(
+                interaction,
+                "I could not access that channel. Please check my channel permissions.",
+            )
+            return
+
+    if not isinstance(resolved_channel, discord.TextChannel):
+        await _send_error(
+            interaction,
+            "Please choose a normal text channel for PokEvent announcements.",
+        )
+        return
+
+    permissions = resolved_channel.permissions_for(bot_member)
     if not permissions.view_channel or not permissions.send_messages:
         await _send_error(
             interaction,
-            f"I need View Channel and Send Messages permission in {channel.mention}.",
+            f"I need **View Channel** and **Send Messages** permission in "
+            f"{resolved_channel.mention}.",
         )
         return
 
@@ -643,7 +662,7 @@ async def eventchannel_set(
                 session,
                 str(interaction.guild_id),
                 target,
-                str(channel.id),
+                str(resolved_channel.id),
             )
             await session.commit()
     except ValueError as exc:
@@ -651,7 +670,8 @@ async def eventchannel_set(
         return
 
     await interaction.response.send_message(
-        f"Automatic posts for **{description}** will go to {channel.mention}.",
+        f"Automatic posts for **{description}** will go to "
+        f"{resolved_channel.mention}.",
         ephemeral=True,
     )
 
