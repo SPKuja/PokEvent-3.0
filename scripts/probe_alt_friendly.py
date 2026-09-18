@@ -2,14 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections import Counter
 
 import httpx
 
-URLS = [
-    "https://pokedata.ovh/events/tableapi/",
-    "https://www.pokedata.ovh/events/tableapi/",
-]
+URL = "https://pokedata.ovh/events/tableapi/"
 
 BASE = {
     "past": "",
@@ -40,44 +36,60 @@ BASE = {
 
 
 async def main() -> None:
-    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-        for url in URLS:
+    async with httpx.AsyncClient(timeout=60) as client:
+        pages = []
+        for page in (0, 1):
             response = await client.post(
-                url,
+                URL,
                 headers={
                     "Accept": "application/json",
                     "Content-Type": "application/json; charset=UTF-8",
                     "User-Agent": "PokEvent/3.0 (+https://github.com/SPKuja/PokEvent-3.0)",
                 },
-                json=BASE,
+                json={**BASE, "page": page},
             )
-            print("URL", url, "HTTP", response.status_code, "final", response.url)
-            try:
-                payload = response.json()
-            except ValueError:
-                print(response.text[:700])
-                continue
+            response.raise_for_status()
+            payload = response.json()
             if not isinstance(payload, list):
-                print("unexpected", type(payload).__name__)
-                continue
-            print("rows", len(payload))
-            print("types", json.dumps(dict(Counter(str(r.get("type")) for r in payload if isinstance(r, dict))), sort_keys=True))
-            swindon = [
-                {
-                    "guid": r.get("guid"),
-                    "league": r.get("league"),
-                    "type": r.get("type"),
-                    "name": r.get("name"),
-                    "shop": r.get("shop"),
-                    "date": r.get("date"),
-                    "when": r.get("when"),
-                    "city": r.get("city"),
-                }
-                for r in payload
-                if isinstance(r, dict)
-                and str(r.get("league", "")).strip() == "2012924"
-            ]
-            print("league 2012924", json.dumps(swindon[:20], indent=2, sort_keys=True))
+                raise RuntimeError(
+                    f"page {page}: unexpected {type(payload).__name__}"
+                )
+            pages.append(payload)
+            print(f"page {page}: {len(payload)} rows")
+
+    ids = [
+        {
+            str(row.get("guid") or row.get("Guid"))
+            for row in page
+            if isinstance(row, dict) and (row.get("guid") or row.get("Guid"))
+        }
+        for page in pages
+    ]
+    print("page0 ids", len(ids[0]))
+    print("page1 ids", len(ids[1]))
+    print("overlap", len(ids[0] & ids[1]))
+    print("identical", ids[0] == ids[1])
+
+    league_rows = [
+        {
+            "guid": row.get("guid"),
+            "league": row.get("league"),
+            "type": row.get("type"),
+            "name": row.get("name"),
+            "shop": row.get("shop"),
+            "date": row.get("date"),
+            "when": row.get("when"),
+            "city": row.get("city"),
+        }
+        for page in pages
+        for row in page
+        if isinstance(row, dict)
+        and str(row.get("league", "")).strip() == "2012924"
+    ]
+    print("league 2012924", json.dumps(league_rows, indent=2, sort_keys=True))
+
+    if len(pages[0]) == 100 and ids[0] == ids[1]:
+        raise SystemExit("pagination is repeating page 0")
 
 
 if __name__ == "__main__":
