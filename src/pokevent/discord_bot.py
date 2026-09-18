@@ -40,11 +40,41 @@ class PokEventBot(commands.Bot):
         intents = discord.Intents.none()
         intents.guilds = True
         super().__init__(command_prefix=commands.when_mentioned, intents=intents)
+        self._synced_guild_ids: set[int] = set()
 
     async def setup_hook(self) -> None:
         await self.tree.sync()
         if not publish_event_routes.is_running():
             publish_event_routes.start()
+
+    async def _sync_commands_to_guild(self, guild: discord.Guild) -> None:
+        if not settings.sync_guild_commands or guild.id in self._synced_guild_ids:
+            return
+
+        guild_ref = discord.Object(id=guild.id)
+        self.tree.clear_commands(guild=guild_ref)
+        self.tree.copy_global_to(guild=guild_ref)
+        synced = await self.tree.sync(guild=guild_ref)
+        self._synced_guild_ids.add(guild.id)
+        log.info(
+            "synced %s application commands directly to guild=%s (%s)",
+            len(synced),
+            guild.id,
+            guild.name,
+        )
+
+    async def on_ready(self) -> None:
+        for guild in self.guilds:
+            try:
+                await self._sync_commands_to_guild(guild)
+            except discord.HTTPException:
+                log.exception("failed to sync commands to guild=%s", guild.id)
+
+    async def on_guild_join(self, guild: discord.Guild) -> None:
+        try:
+            await self._sync_commands_to_guild(guild)
+        except discord.HTTPException:
+            log.exception("failed to sync commands to new guild=%s", guild.id)
 
 
 def _event_line(event: Event) -> str:

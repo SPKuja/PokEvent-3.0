@@ -33,6 +33,7 @@ class Settings(BaseSettings):
 
     event_source: str = "pokedata"
     sync_interval_minutes: int = 180
+    sync_guild_commands: bool = True
 
 
 @lru_cache
