@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from datetime import UTC, datetime
 
 import discord
@@ -15,6 +16,9 @@ from .models import Event
 
 settings = get_settings()
 
+EVENTS_PAGE_SIZE = 10
+EVENTS_QUERY_LIMIT = 250
+
 
 class PokEventBot(commands.Bot):
     def __init__(self) -> None:
@@ -24,6 +28,79 @@ class PokEventBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         await self.tree.sync()
+
+
+def _event_line(event: Event) -> str:
+    title = event.title
+    if len(title) > 120:
+        title = f"{title[:117]}..."
+    return f"**{title}** — {discord.utils.format_dt(event.starts_at, style='F')}"
+
+
+def event_page_content(rows: list[Event], page: int) -> str:
+    total_pages = max(1, math.ceil(len(rows) / EVENTS_PAGE_SIZE))
+    page = max(0, min(page, total_pages - 1))
+    start = page * EVENTS_PAGE_SIZE
+    visible = rows[start : start + EVENTS_PAGE_SIZE]
+
+    lines = [_event_line(event) for event in visible]
+    lines.append("")
+    lines.append(
+        f"Page **{page + 1}/{total_pages}** · "
+        f"Showing {start + 1}-{start + len(visible)} of {len(rows)} upcoming events"
+    )
+    return "\n".join(lines)
+
+
+class EventPagerView(discord.ui.View):
+    def __init__(self, rows: list[Event]) -> None:
+        super().__init__(timeout=180)
+        self.rows = rows
+        self.page = 0
+        self.total_pages = max(1, math.ceil(len(rows) / EVENTS_PAGE_SIZE))
+        self._sync_buttons()
+
+    def _sync_buttons(self) -> None:
+        self.previous_page.disabled = self.page <= 0
+        self.next_page.disabled = self.page >= self.total_pages - 1
+
+    @discord.ui.button(
+        label="Previous",
+        style=discord.ButtonStyle.secondary,
+        emoji="◀️",
+    )
+    async def previous_page(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        del button
+        if self.page > 0:
+            self.page -= 1
+        self._sync_buttons()
+        await interaction.response.edit_message(
+            content=event_page_content(self.rows, self.page),
+            view=self,
+        )
+
+    @discord.ui.button(
+        label="Next",
+        style=discord.ButtonStyle.secondary,
+        emoji="▶️",
+    )
+    async def next_page(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        del button
+        if self.page < self.total_pages - 1:
+            self.page += 1
+        self._sync_buttons()
+        await interaction.response.edit_message(
+            content=event_page_content(self.rows, self.page),
+            view=self,
+        )
 
 
 bot = PokEventBot()
@@ -38,18 +115,20 @@ async def status(interaction: discord.Interaction) -> None:
     )
 
 
-@bot.tree.command(name="events", description="Show the next Pokémon events in the catalogue.")
+@bot.tree.command(name="events", description="Browse upcoming Pokémon events.")
 async def events(interaction: discord.Interaction) -> None:
     now = datetime.now(UTC)
     async with SessionFactory() as session:
-        rows = (
-            await session.scalars(
-                select(Event)
-                .where(Event.starts_at >= now, Event.status == "active")
-                .order_by(Event.starts_at)
-                .limit(10)
-            )
-        ).all()
+        rows = list(
+            (
+                await session.scalars(
+                    select(Event)
+                    .where(Event.starts_at >= now, Event.status == "active")
+                    .order_by(Event.starts_at)
+                    .limit(EVENTS_QUERY_LIMIT)
+                )
+            ).all()
+        )
 
     if not rows:
         await interaction.response.send_message(
@@ -58,11 +137,12 @@ async def events(interaction: discord.Interaction) -> None:
         )
         return
 
-    lines = [
-        f"**{event.title}** — {discord.utils.format_dt(event.starts_at, style='F')}"
-        for event in rows
-    ]
-    await interaction.response.send_message("\n".join(lines), ephemeral=True)
+    view = EventPagerView(rows)
+    await interaction.response.send_message(
+        event_page_content(rows, 0),
+        view=view,
+        ephemeral=True,
+    )
 
 
 bot.tree.add_command(pokevent)
