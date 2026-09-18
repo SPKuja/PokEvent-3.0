@@ -1,0 +1,25 @@
+services:
+  web:
+    build: .
+    command: pokevent-web
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - pokevent-data:/data
+    ports:
+      - "8080:8080"
+
+  bot:
+    build: .
+    command: pokevent-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - pokevent-data:/data
+    depends_on:
+      - web
+
+volumes:
+  pokevent-data:
