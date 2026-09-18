@@ -1,4 +1,126 @@
-from __future__ import annotations\n\nimport asyncio\nimport logging\nimport math\nfrom datetime import UTC, datetime\n\nimport discord\nfrom discord import app_commands\nfrom discord.ext import commands, tasks\nfrom sqlalchemy import select\n\nfrom . import __version__\nfrom .config import get_settings\nfrom .db import SessionFactory\nfrom .guild_config import (\n    add_guild_league,\n    clear_event_channel,\n    ensure_guild_config,\n    guild_leagues,\n    remove_guild_league,\n    rename_guild_league,\n    resolve_guild_league,\n    set_default_league,\n    set_event_channel,\n)\nfrom .models import Event, GuildLeague, PublishedMessage, Route\n\nsettings = get_settings()\nlog = logging.getLogger(\"pokevent.discord\")\n\nEVENTS_PAGE_SIZE = 10\nEVENTS_QUERY_LIMIT = 250\n\n\nclass PokEventBot(commands.Bot):\n    def __init__(self) -> None:\n        intents = discord.Intents.none()\n        intents.guilds = True\n        super().__init__(command_prefix=commands.when_mentioned, intents=intents)\n\n    async def setup_hook(self) -> None:\n        await self.tree.sync()\n\n\ndef _event_line(event: Event) -> str:\n    title = event.title\n    if len(title) > 120:\n        title = f"{title[:117]}..."\n    return f"**{title}** — {discord.utils.format_dt(event.starts_at, style='F')}"\n\n\ndef event_page_content(rows: list[Event], page: int, heading: str) -> str:\n    total_pages = max(1, math.ceil(len(rows) / EVENTS_PAGE_SIZE))\n    page = max(0, min(page, total_pages - 1))\n    start = page * EVENTS_PAGE_SIZE\n    visible = rows[start : start + EVENTS_PAGE_SIZE]\n\n    lines = [f"### {heading}"]\n    lines.extend(_event_line(event) for event in visible)\n    lines.append("")\n    lines.append(\n        f"Page **{page + 1}/{total_pages}** · "\n        f"Showing {start + 1}-{start + len(visible)} of {len(rows)} upcoming events"\n    )\n    return "\n".join(lines)\n\n\nclass EventPagerView(discord.ui.View):\n    def __init__(self, rows: list[Event], heading: str) -> None:\n        super().__init__(timeout=180)\n        self.rows = rows\n        self.heading = heading\n        self.page = 0\n        self.total_pages = max(1, math.ceil(len(rows) / EVENTS_PAGE_SIZE))\n        self._sync_buttons()\n\n    def _sync_buttons(self) -> None:\n        self.previous_page.disabled = self.page <= 0\n        self.next_page.disabled = self.page >= self.total_pages - 1\n\n    @discord.ui.button(\n        label="Previous",\n        style=discord.ButtonStyle.secondary,\n        emoji="◀️",\n    )\n    async def previous_page(\n        self,\n        interaction: discord.Interaction,\n        button: discord.ui.Button,\n    ) -> None:\n        del button\n        if self.page > 0:\n            self.page -= 1\n        self._sync_buttons()\n        await interaction.response.edit_message(\n            content=event_page_content(self.rows, self.page, self.heading),\n            view=self,\n        )\n\n    @discord.ui.button(\n        label="Next",\n        style=discord.ButtonStyle.secondary,\n        emoji="▶️",\n    )\n    async def next_page(\n        self,\n        interaction: discord.Interaction,\n        button: discord.ui.Button,\n    ) -> None:\n        del button\n        if self.page < self.total_pages - 1:\n            self.page += 1\n        self._sync_buttons()\n        await interaction.response.edit_message(\n            content=event_page_content(self.rows, self.page, self.heading),\n            view=self,\n        )\n\n\ndef _event_embed(event: Event) -> discord.Embed:
+from __future__ import annotations
+
+import asyncio
+import logging
+import math
+from datetime import UTC, datetime
+
+import discord
+from discord import app_commands
+from discord.ext import commands, tasks
+from sqlalchemy import select
+
+from . import __version__
+from .config import get_settings
+from .db import SessionFactory
+from .guild_config import (
+    add_guild_league,
+    clear_event_channel,
+    ensure_guild_config,
+    guild_leagues,
+    remove_guild_league,
+    rename_guild_league,
+    resolve_guild_league,
+    set_default_league,
+    set_event_channel,
+)
+from .models import Event, GuildLeague, PublishedMessage, Route
+
+settings = get_settings()
+log = logging.getLogger("pokevent.discord")
+
+EVENTS_PAGE_SIZE = 10
+EVENTS_QUERY_LIMIT = 250
+
+
+class PokEventBot(commands.Bot):
+    def __init__(self) -> None:
+        intents = discord.Intents.none()
+        intents.guilds = True
+        super().__init__(command_prefix=commands.when_mentioned, intents=intents)
+
+    async def setup_hook(self) -> None:
+        await self.tree.sync()
+        if not publish_event_routes.is_running():
+            publish_event_routes.start()
+
+
+def _event_line(event: Event) -> str:
+    title = event.title
+    if len(title) > 120:
+        title = f"{title[:117]}..."
+    return f"**{title}** — {discord.utils.format_dt(event.starts_at, style='F')}"
+
+
+def event_page_content(rows: list[Event], page: int, heading: str) -> str:
+    total_pages = max(1, math.ceil(len(rows) / EVENTS_PAGE_SIZE))
+    page = max(0, min(page, total_pages - 1))
+    start = page * EVENTS_PAGE_SIZE
+    visible = rows[start : start + EVENTS_PAGE_SIZE]
+
+    lines = [f"### {heading}"]
+    lines.extend(_event_line(event) for event in visible)
+    lines.append("")
+    lines.append(
+        f"Page **{page + 1}/{total_pages}** · "
+        f"Showing {start + 1}-{start + len(visible)} of {len(rows)} upcoming events"
+    )
+    return "\n".join(lines)
+
+
+class EventPagerView(discord.ui.View):
+    def __init__(self, rows: list[Event], heading: str) -> None:
+        super().__init__(timeout=180)
+        self.rows = rows
+        self.heading = heading
+        self.page = 0
+        self.total_pages = max(1, math.ceil(len(rows) / EVENTS_PAGE_SIZE))
+        self._sync_buttons()
+
+    def _sync_buttons(self) -> None:
+        self.previous_page.disabled = self.page <= 0
+        self.next_page.disabled = self.page >= self.total_pages - 1
+
+    @discord.ui.button(
+        label="Previous",
+        style=discord.ButtonStyle.secondary,
+        emoji="◀️",
+    )
+    async def previous_page(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        del button
+        if self.page > 0:
+            self.page -= 1
+        self._sync_buttons()
+        await interaction.response.edit_message(
+            content=event_page_content(self.rows, self.page, self.heading),
+            view=self,
+        )
+
+    @discord.ui.button(
+        label="Next",
+        style=discord.ButtonStyle.secondary,
+        emoji="▶️",
+    )
+    async def next_page(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        del button
+        if self.page < self.total_pages - 1:
+            self.page += 1
+        self._sync_buttons()
+        await interaction.response.edit_message(
+            content=event_page_content(self.rows, self.page, self.heading),
+            view=self,
+        )
+
+
+def _event_embed(event: Event) -> discord.Embed:
     embed = discord.Embed(
         title=event.title[:256],
         url=event.source_url or None,
@@ -8,13 +130,23 @@ from __future__ import annotations\n\nimport asyncio\nimport logging\nimport mat
         embed.add_field(name="Game", value=event.game.upper(), inline=True)
     if event.event_type:
         embed.add_field(name="Event", value=event.event_type, inline=True)
-    location = ", ".join(
-        part for part in (event.venue_name, event.city) if part
-    )
+    location = ", ".join(part for part in (event.venue_name, event.city) if part)
     if location:
         embed.add_field(name="Venue", value=location[:1024], inline=False)
     embed.set_footer(text="PokEvent 3.0")
     return embed
+
+
+bot = PokEventBot()
+pokevent = app_commands.Group(name="pokevent", description="PokEvent 3.0")
+league_group = app_commands.Group(
+    name="league",
+    description="Configure this server's Play! Pokémon Leagues.",
+)
+eventchannel_group = app_commands.Group(
+    name="eventchannel",
+    description="Configure automatic PokEvent announcement channels.",
+)
 
 
 async def _discord_channel(channel_id: str) -> discord.TextChannel | None:
@@ -147,4 +279,449 @@ async def before_publish_event_routes() -> None:
     await bot.wait_until_ready()
 
 
-bot = PokEventBot()\npokevent = app_commands.Group(name="pokevent", description="PokEvent 3.0")\nleague_group = app_commands.Group(\n    name="league",\n    description="Configure this server's Play! Pokémon Leagues.",\n)\neventchannel_group = app_commands.Group(\n    name="eventchannel",\n    description="Configure automatic PokEvent announcement channels.",\n)\n\n\nasync def _guild_choices(\n    interaction: discord.Interaction,\n    current: str,\n    *,\n    include_special: bool = False,\n) -> list[app_commands.Choice[str]]:\n    if interaction.guild_id is None:\n        return []\n\n    async with SessionFactory() as session:\n        leagues = await guild_leagues(session, str(interaction.guild_id))\n        await session.commit()\n\n    needle = current.casefold().strip()\n    choices: list[app_commands.Choice[str]] = []\n\n    if include_special:\n        specials = (\n            ("Nearby", "nearby"),\n            ("Default", "default"),\n            ("All non-default Leagues", "all"),\n        )\n        choices.extend(\n            app_commands.Choice(name=name, value=value)\n            for name, value in specials\n            if not needle or needle in name.casefold() or needle in value\n        )\n\n    choices.extend(\n        app_commands.Choice(name=league.name, value=league.name)\n        for league in leagues\n        if not needle\n        or needle in league.name.casefold()\n        or needle in league.league_id.casefold()\n    )\n    return choices[:25]\n\n\nasync def _league_autocomplete(\n    interaction: discord.Interaction,\n    current: str,\n) -> list[app_commands.Choice[str]]:\n    return await _guild_choices(interaction, current)\n\n\nasync def _events_autocomplete(\n    interaction: discord.Interaction,\n    current: str,\n) -> list[app_commands.Choice[str]]:\n    return await _guild_choices(interaction, current, include_special=True)\n\n\nasync def _channel_target_autocomplete(\n    interaction: discord.Interaction,\n    current: str,\n) -> list[app_commands.Choice[str]]:\n    choices = await _guild_choices(interaction, current, include_special=True)\n    return [choice for choice in choices if choice.value != "nearby"]\n\n\nasync def _send_error(interaction: discord.Interaction, message: str) -> None:\n    if interaction.response.is_done():\n        await interaction.followup.send(message, ephemeral=True)\n    else:\n        await interaction.response.send_message(message, ephemeral=True)\n\n\ndef _admin_only(command):\n    command = app_commands.guild_only()(command)\n    command = app_commands.default_permissions(administrator=True)(command)\n    return app_commands.checks.has_permissions(administrator=True)(command)\n\n\n@pokevent.command(name="status", description="Show the PokEvent service status.")\nasync def status(interaction: discord.Interaction) -> None:\n    await interaction.response.send_message(\n        f"PokEvent {__version__} is online.",\n        ephemeral=True,\n    )\n\n\n@bot.tree.command(name="events", description="Browse upcoming Pokémon events.")\n@app_commands.guild_only()\n@app_commands.describe(\n    league="Leave blank for the server default, choose a League, or choose nearby.",\n)\nasync def events(\n    interaction: discord.Interaction,\n    league: str | None = None,\n) -> None:\n    assert interaction.guild_id is not None\n    guild_id = str(interaction.guild_id)\n    selector = (league or "default").strip()\n\n    async with SessionFactory() as session:\n        config = await ensure_guild_config(session, guild_id)\n\n        if selector.casefold() == "nearby":\n            heading = "Nearby Pokémon events"\n            statement = (\n                select(Event)\n                .where(Event.starts_at >= datetime.now(UTC), Event.status == "active")\n                .order_by(Event.starts_at)\n                .limit(EVENTS_QUERY_LIMIT)\n            )\n        else:\n            if selector.casefold() == "default":\n                if not config.default_league_id:\n                    await session.commit()\n                    await interaction.response.send_message(\n                        "This server does not have a default League yet. "\n                        "A server administrator can set one with /league default.",\n                        ephemeral=True,\n                    )\n                    return\n                chosen = await session.scalar(\n                    select(GuildLeague).where(\n                        GuildLeague.guild_id == guild_id,\n                        GuildLeague.league_id == config.default_league_id,\n                    )\n                )\n            else:\n                chosen = await resolve_guild_league(session, guild_id, selector)\n\n            if chosen is None:\n                await session.commit()\n                await interaction.response.send_message(\n                    f"I don't know a League called **{selector}** on this server.",\n                    ephemeral=True,\n                )\n                return\n\n            heading = f"{chosen.name} events"\n            statement = (\n                select(Event)\n                .where(\n                    Event.starts_at >= datetime.now(UTC),\n                    Event.status == "active",\n                    Event.upstream_organisation_id == chosen.league_id,\n                )\n                .order_by(Event.starts_at)\n                .limit(EVENTS_QUERY_LIMIT)\n            )\n\n        rows = list((await session.scalars(statement)).all())\n        await session.commit()\n\n    if not rows:\n        await interaction.response.send_message(\n            f"No upcoming events are currently available for **{heading.removesuffix(' events')}**.",\n            ephemeral=True,\n        )\n        return\n\n    view = EventPagerView(rows, heading)\n    await interaction.response.send_message(\n        event_page_content(rows, 0, heading),\n        view=view,\n        ephemeral=True,\n    )\n\n\n@events.autocomplete("league")\nasync def events_league_autocomplete(\n    interaction: discord.Interaction,\n    current: str,\n) -> list[app_commands.Choice[str]]:\n    return await _events_autocomplete(interaction, current)\n\n\n@league_group.command(name="add", description="Add a Play! Pokémon League to this server.")\n@_admin_only\n@app_commands.describe(name="Friendly League name", league_id="Play! Pokémon League ID")\nasync def league_add(\n    interaction: discord.Interaction,\n    name: str,\n    league_id: str,\n) -> None:\n    assert interaction.guild_id is not None\n    try:\n        async with SessionFactory() as session:\n            added = await add_guild_league(\n                session, str(interaction.guild_id), name, league_id\n            )\n            await session.commit()\n    except ValueError as exc:\n        await _send_error(interaction, str(exc))\n        return\n\n    await interaction.response.send_message(\n        f"Added **{added.name}** ({added.league_id}). "\n        "Its events will be picked up on the next catalogue sync.",\n        ephemeral=True,\n    )\n\n\n@league_group.command(name="remove", description="Remove a League from this server.")\n@_admin_only\n@app_commands.describe(league="League to remove")\nasync def league_remove(interaction: discord.Interaction, league: str) -> None:\n    assert interaction.guild_id is not None\n    try:\n        async with SessionFactory() as session:\n            removed = await remove_guild_league(\n                session, str(interaction.guild_id), league\n            )\n            await session.commit()\n    except ValueError as exc:\n        await _send_error(interaction, str(exc))\n        return\n\n    await interaction.response.send_message(\n        f"Removed **{removed.name}** ({removed.league_id}).",\n        ephemeral=True,\n    )\n\n\n@league_remove.autocomplete("league")\nasync def league_remove_autocomplete(\n    interaction: discord.Interaction, current: str\n) -> list[app_commands.Choice[str]]:\n    return await _league_autocomplete(interaction, current)\n\n\n@league_group.command(name="rename", description="Rename a configured League.")\n@_admin_only\n@app_commands.describe(league="League to rename", name="New friendly name")\nasync def league_rename(\n    interaction: discord.Interaction, league: str, name: str\n) -> None:\n    assert interaction.guild_id is not None\n    try:\n        async with SessionFactory() as session:\n            renamed = await rename_guild_league(\n                session, str(interaction.guild_id), league, name\n            )\n            await session.commit()\n    except ValueError as exc:\n        await _send_error(interaction, str(exc))\n        return\n\n    await interaction.response.send_message(\n        f"League renamed to **{renamed.name}** ({renamed.league_id}).",\n        ephemeral=True,\n    )\n\n\n@league_rename.autocomplete("league")\nasync def league_rename_autocomplete(\n    interaction: discord.Interaction, current: str\n) -> list[app_commands.Choice[str]]:\n    return await _league_autocomplete(interaction, current)\n\n\n@league_group.command(name="default", description="Set this server's default League.")\n@_admin_only\n@app_commands.describe(league="League to use when /events has no parameter")\nasync def league_default(interaction: discord.Interaction, league: str) -> None:\n    assert interaction.guild_id is not None\n    try:\n        async with SessionFactory() as session:\n            chosen = await set_default_league(\n                session, str(interaction.guild_id), league\n            )\n            await session.commit()\n    except ValueError as exc:\n        await _send_error(interaction, str(exc))\n        return\n\n    await interaction.response.send_message(\n        f"**{chosen.name}** ({chosen.league_id}) is now this server's default League.",\n        ephemeral=True,\n    )\n\n\n@league_default.autocomplete("league")\nasync def league_default_autocomplete(\n    interaction: discord.Interaction, current: str\n) -> list[app_commands.Choice[str]]:\n    return await _league_autocomplete(interaction, current)\n\n\n@league_group.command(name="list", description="List the Leagues configured on this server.")\n@app_commands.guild_only()\nasync def league_list(interaction: discord.Interaction) -> None:\n    assert interaction.guild_id is not None\n    async with SessionFactory() as session:\n        config = await ensure_guild_config(session, str(interaction.guild_id))\n        leagues = await guild_leagues(session, str(interaction.guild_id))\n        await session.commit()\n\n    if not leagues:\n        await interaction.response.send_message(\n            "No Leagues are configured on this server.", ephemeral=True\n        )\n        return\n\n    lines = []\n    for configured in leagues:\n        marker = (\n            " **(default)**"\n            if configured.league_id == config.default_league_id\n            else ""\n        )\n        origin = "server" if configured.origin == "server" else "service"\n        lines.append(\n            f"• **{configured.name}** — {configured.league_id}{marker} · {origin}"\n        )\n    await interaction.response.send_message("\n".join(lines), ephemeral=True)\n\n\n@eventchannel_group.command(\n    name="set", description="Set an automatic event announcement channel."\n)\n@_admin_only\n@app_commands.describe(\n    target="default, all, or a configured League",\n    channel="Channel where matching new events should be posted",\n)\nasync def eventchannel_set(\n    interaction: discord.Interaction,\n    target: str,\n    channel: discord.TextChannel,\n) -> None:\n    assert interaction.guild_id is not None\n    assert interaction.guild is not None\n\n    bot_member = interaction.guild.me\n    if bot_member is None:\n        await _send_error(interaction, "I could not resolve my server permissions.")\n        return\n\n    permissions = channel.permissions_for(bot_member)\n    if not permissions.view_channel or not permissions.send_messages:\n        await _send_error(\n            interaction,\n            f"I need View Channel and Send Messages permission in {channel.mention}.",\n        )\n        return\n\n    try:\n        async with SessionFactory() as session:\n            description = await set_event_channel(\n                session, str(interaction.guild_id), target, str(channel.id)\n            )\n            await session.commit()\n    except ValueError as exc:\n        await _send_error(interaction, str(exc))\n        return\n\n    await interaction.response.send_message(\n        f"Automatic posts for **{description}** will go to {channel.mention}.",\n        ephemeral=True,\n    )\n\n\n@eventchannel_set.autocomplete("target")\nasync def eventchannel_set_autocomplete(\n    interaction: discord.Interaction, current: str\n) -> list[app_commands.Choice[str]]:\n    return await _channel_target_autocomplete(interaction, current)\n\n\n@eventchannel_group.command(\n    name="clear", description="Clear an automatic event announcement channel."\n)\n@_admin_only\n@app_commands.describe(target="default, all, or a configured League")\nasync def eventchannel_clear(interaction: discord.Interaction, target: str) -> None:\n    assert interaction.guild_id is not None\n    try:\n        async with SessionFactory() as session:\n            description = await clear_event_channel(\n                session, str(interaction.guild_id), target\n            )\n            await session.commit()\n    except ValueError as exc:\n        await _send_error(interaction, str(exc))\n        return\n\n    await interaction.response.send_message(\n        f"Cleared the automatic post channel for **{description}**.",\n        ephemeral=True,\n    )\n\n\n@eventchannel_clear.autocomplete("target")\nasync def eventchannel_clear_autocomplete(\n    interaction: discord.Interaction, current: str\n) -> list[app_commands.Choice[str]]:\n    return await _channel_target_autocomplete(interaction, current)\n\n\n@bot.tree.error\nasync def on_app_command_error(\n    interaction: discord.Interaction,\n    error: app_commands.AppCommandError,\n) -> None:\n    if isinstance(error, app_commands.MissingPermissions):\n        await _send_error(\n            interaction,\n            "You need the Administrator permission to change PokEvent configuration.",\n        )\n        return\n    raise error\n\n\nbot.tree.add_command(pokevent)\nbot.tree.add_command(league_group)\nbot.tree.add_command(eventchannel_group)\n\n\nasync def run_bot() -> None:\n    if not settings.discord_token:\n        raise RuntimeError("POKEVENT_DISCORD_TOKEN is required to run the Discord bot.")\n    await bot.start(settings.discord_token)\n\n\ndef main() -> None:\n    asyncio.run(run_bot())\n
+async def _guild_choices(
+    interaction: discord.Interaction,
+    current: str,
+    *,
+    include_special: bool = False,
+) -> list[app_commands.Choice[str]]:
+    if interaction.guild_id is None:
+        return []
+
+    async with SessionFactory() as session:
+        leagues = await guild_leagues(session, str(interaction.guild_id))
+        await session.commit()
+
+    needle = current.casefold().strip()
+    choices: list[app_commands.Choice[str]] = []
+
+    if include_special:
+        specials = (
+            ("Nearby", "nearby"),
+            ("Default", "default"),
+            ("All non-default Leagues", "all"),
+        )
+        choices.extend(
+            app_commands.Choice(name=name, value=value)
+            for name, value in specials
+            if not needle or needle in name.casefold() or needle in value
+        )
+
+    choices.extend(
+        app_commands.Choice(name=league.name, value=league.name)
+        for league in leagues
+        if not needle
+        or needle in league.name.casefold()
+        or needle in league.league_id.casefold()
+    )
+    return choices[:25]
+
+
+async def _league_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    return await _guild_choices(interaction, current)
+
+
+async def _events_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    return await _guild_choices(interaction, current, include_special=True)
+
+
+async def _channel_target_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    choices = await _guild_choices(interaction, current, include_special=True)
+    return [choice for choice in choices if choice.value != "nearby"]
+
+
+async def _send_error(interaction: discord.Interaction, message: str) -> None:
+    if interaction.response.is_done():
+        await interaction.followup.send(message, ephemeral=True)
+    else:
+        await interaction.response.send_message(message, ephemeral=True)
+
+
+def _admin_only(command):
+    command = app_commands.guild_only()(command)
+    command = app_commands.default_permissions(administrator=True)(command)
+    return app_commands.checks.has_permissions(administrator=True)(command)
+
+
+@pokevent.command(name="status", description="Show the PokEvent service status.")
+async def status(interaction: discord.Interaction) -> None:
+    await interaction.response.send_message(
+        f"PokEvent {__version__} is online.",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="events", description="Browse upcoming Pokémon events.")
+@app_commands.guild_only()
+@app_commands.describe(
+    league="Leave blank for the server default, choose a League, or choose nearby.",
+)
+async def events(
+    interaction: discord.Interaction,
+    league: str | None = None,
+) -> None:
+    assert interaction.guild_id is not None
+    guild_id = str(interaction.guild_id)
+    selector = (league or "default").strip()
+
+    async with SessionFactory() as session:
+        config = await ensure_guild_config(session, guild_id)
+
+        if selector.casefold() == "nearby":
+            heading = "Nearby Pokémon events"
+            statement = (
+                select(Event)
+                .where(Event.starts_at >= datetime.now(UTC), Event.status == "active")
+                .order_by(Event.starts_at)
+                .limit(EVENTS_QUERY_LIMIT)
+            )
+        else:
+            if selector.casefold() == "default":
+                if not config.default_league_id:
+                    await session.commit()
+                    await interaction.response.send_message(
+                        "This server does not have a default League yet. "
+                        "A server administrator can set one with /league default.",
+                        ephemeral=True,
+                    )
+                    return
+                chosen = await session.scalar(
+                    select(GuildLeague).where(
+                        GuildLeague.guild_id == guild_id,
+                        GuildLeague.league_id == config.default_league_id,
+                    )
+                )
+            else:
+                chosen = await resolve_guild_league(session, guild_id, selector)
+
+            if chosen is None:
+                await session.commit()
+                await interaction.response.send_message(
+                    f"I don't know a League called **{selector}** on this server.",
+                    ephemeral=True,
+                )
+                return
+
+            heading = f"{chosen.name} events"
+            statement = (
+                select(Event)
+                .where(
+                    Event.starts_at >= datetime.now(UTC),
+                    Event.status == "active",
+                    Event.upstream_organisation_id == chosen.league_id,
+                )
+                .order_by(Event.starts_at)
+                .limit(EVENTS_QUERY_LIMIT)
+            )
+
+        rows = list((await session.scalars(statement)).all())
+        await session.commit()
+
+    if not rows:
+        await interaction.response.send_message(
+            f"No upcoming events are currently available for "
+            f"**{heading.removesuffix(' events')}**.",
+            ephemeral=True,
+        )
+        return
+
+    view = EventPagerView(rows, heading)
+    await interaction.response.send_message(
+        event_page_content(rows, 0, heading),
+        view=view,
+        ephemeral=True,
+    )
+
+
+@events.autocomplete("league")
+async def events_league_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    return await _events_autocomplete(interaction, current)
+
+
+@league_group.command(name="add", description="Add a Play! Pokémon League to this server.")
+@_admin_only
+@app_commands.describe(name="Friendly League name", league_id="Play! Pokémon League ID")
+async def league_add(
+    interaction: discord.Interaction,
+    name: str,
+    league_id: str,
+) -> None:
+    assert interaction.guild_id is not None
+    try:
+        async with SessionFactory() as session:
+            added = await add_guild_league(
+                session,
+                str(interaction.guild_id),
+                name,
+                league_id,
+            )
+            await session.commit()
+    except ValueError as exc:
+        await _send_error(interaction, str(exc))
+        return
+
+    await interaction.response.send_message(
+        f"Added **{added.name}** ({added.league_id}). "
+        "Its events will be picked up on the next catalogue sync.",
+        ephemeral=True,
+    )
+
+
+@league_group.command(name="remove", description="Remove a League from this server.")
+@_admin_only
+@app_commands.describe(league="League to remove")
+async def league_remove(interaction: discord.Interaction, league: str) -> None:
+    assert interaction.guild_id is not None
+    try:
+        async with SessionFactory() as session:
+            removed = await remove_guild_league(
+                session,
+                str(interaction.guild_id),
+                league,
+            )
+            await session.commit()
+    except ValueError as exc:
+        await _send_error(interaction, str(exc))
+        return
+
+    await interaction.response.send_message(
+        f"Removed **{removed.name}** ({removed.league_id}).",
+        ephemeral=True,
+    )
+
+
+@league_remove.autocomplete("league")
+async def league_remove_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    return await _league_autocomplete(interaction, current)
+
+
+@league_group.command(name="rename", description="Rename a configured League.")
+@_admin_only
+@app_commands.describe(league="League to rename", name="New friendly name")
+async def league_rename(
+    interaction: discord.Interaction,
+    league: str,
+    name: str,
+) -> None:
+    assert interaction.guild_id is not None
+    try:
+        async with SessionFactory() as session:
+            renamed = await rename_guild_league(
+                session,
+                str(interaction.guild_id),
+                league,
+                name,
+            )
+            await session.commit()
+    except ValueError as exc:
+        await _send_error(interaction, str(exc))
+        return
+
+    await interaction.response.send_message(
+        f"League renamed to **{renamed.name}** ({renamed.league_id}).",
+        ephemeral=True,
+    )
+
+
+@league_rename.autocomplete("league")
+async def league_rename_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    return await _league_autocomplete(interaction, current)
+
+
+@league_group.command(name="default", description="Set this server's default League.")
+@_admin_only
+@app_commands.describe(league="League to use when /events has no parameter")
+async def league_default(interaction: discord.Interaction, league: str) -> None:
+    assert interaction.guild_id is not None
+    try:
+        async with SessionFactory() as session:
+            chosen = await set_default_league(
+                session,
+                str(interaction.guild_id),
+                league,
+            )
+            await session.commit()
+    except ValueError as exc:
+        await _send_error(interaction, str(exc))
+        return
+
+    await interaction.response.send_message(
+        f"**{chosen.name}** ({chosen.league_id}) is now this server's default League.",
+        ephemeral=True,
+    )
+
+
+@league_default.autocomplete("league")
+async def league_default_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    return await _league_autocomplete(interaction, current)
+
+
+@league_group.command(name="list", description="List the Leagues configured on this server.")
+@app_commands.guild_only()
+async def league_list(interaction: discord.Interaction) -> None:
+    assert interaction.guild_id is not None
+    async with SessionFactory() as session:
+        config = await ensure_guild_config(session, str(interaction.guild_id))
+        leagues = await guild_leagues(session, str(interaction.guild_id))
+        await session.commit()
+
+    if not leagues:
+        await interaction.response.send_message(
+            "No Leagues are configured on this server.",
+            ephemeral=True,
+        )
+        return
+
+    lines = []
+    for configured in leagues:
+        marker = (
+            " **(default)**"
+            if configured.league_id == config.default_league_id
+            else ""
+        )
+        origin = "server" if configured.origin == "server" else "service"
+        lines.append(
+            f"• **{configured.name}** — {configured.league_id}{marker} · {origin}"
+        )
+    await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+
+@eventchannel_group.command(
+    name="set",
+    description="Set an automatic event announcement channel.",
+)
+@_admin_only
+@app_commands.describe(
+    target="default, all, or a configured League",
+    channel="Channel where matching new events should be posted",
+)
+async def eventchannel_set(
+    interaction: discord.Interaction,
+    target: str,
+    channel: discord.TextChannel,
+) -> None:
+    assert interaction.guild_id is not None
+    assert interaction.guild is not None
+
+    bot_member = interaction.guild.me
+    if bot_member is None:
+        await _send_error(interaction, "I could not resolve my server permissions.")
+        return
+
+    permissions = channel.permissions_for(bot_member)
+    if not permissions.view_channel or not permissions.send_messages:
+        await _send_error(
+            interaction,
+            f"I need View Channel and Send Messages permission in {channel.mention}.",
+        )
+        return
+
+    try:
+        async with SessionFactory() as session:
+            description = await set_event_channel(
+                session,
+                str(interaction.guild_id),
+                target,
+                str(channel.id),
+            )
+            await session.commit()
+    except ValueError as exc:
+        await _send_error(interaction, str(exc))
+        return
+
+    await interaction.response.send_message(
+        f"Automatic posts for **{description}** will go to {channel.mention}.",
+        ephemeral=True,
+    )
+
+
+@eventchannel_set.autocomplete("target")
+async def eventchannel_set_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    return await _channel_target_autocomplete(interaction, current)
+
+
+@eventchannel_group.command(
+    name="clear",
+    description="Clear an automatic event announcement channel.",
+)
+@_admin_only
+@app_commands.describe(target="default, all, or a configured League")
+async def eventchannel_clear(interaction: discord.Interaction, target: str) -> None:
+    assert interaction.guild_id is not None
+    try:
+        async with SessionFactory() as session:
+            description = await clear_event_channel(
+                session,
+                str(interaction.guild_id),
+                target,
+            )
+            await session.commit()
+    except ValueError as exc:
+        await _send_error(interaction, str(exc))
+        return
+
+    await interaction.response.send_message(
+        f"Cleared the automatic post channel for **{description}**.",
+        ephemeral=True,
+    )
+
+
+@eventchannel_clear.autocomplete("target")
+async def eventchannel_clear_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    return await _channel_target_autocomplete(interaction, current)
+
+
+@bot.tree.error
+async def on_app_command_error(
+    interaction: discord.Interaction,
+    error: app_commands.AppCommandError,
+) -> None:
+    if isinstance(error, app_commands.MissingPermissions):
+        await _send_error(
+            interaction,
+            "You need the Administrator permission to change PokEvent configuration.",
+        )
+        return
+    raise error
+
+
+bot.tree.add_command(pokevent)
+bot.tree.add_command(league_group)
+bot.tree.add_command(eventchannel_group)
+
+
+async def run_bot() -> None:
+    if not settings.discord_token:
+        raise RuntimeError("POKEVENT_DISCORD_TOKEN is required to run the Discord bot.")
+    await bot.start(settings.discord_token)
+
+
+def main() -> None:
+    asyncio.run(run_bot())
