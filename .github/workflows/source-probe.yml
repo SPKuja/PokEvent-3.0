@@ -1,0 +1,41 @@
+name: Source Probe
+
+on:
+  push:
+    branches:
+      - feature/play-pokemon-ingestion
+    paths:
+      - "scripts/probe_event.py"
+      - "src/pokevent/sources/pokedata.py"
+      - ".github/workflows/source-probe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  swindon-known-event:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: python -m pip install -e .
+
+      - name: Probe Pokemon League Swindon
+        run: |
+          python scripts/probe_event.py \
+            --league 2012924 \
+            --date 2026-09-20 \
+            --lat 51.5615 \
+            --lon -1.7855 \
+            --radius 50
