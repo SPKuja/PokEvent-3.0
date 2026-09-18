@@ -389,3 +389,38 @@ async def baseline_pending_routes(session: AsyncSession) -> int:
 
     await session.flush()
     return len(routes)
+
+
+async def resolve_event_channel(
+    session: AsyncSession,
+    guild_id: str,
+    target: str,
+) -> tuple[GuildLeague | None, str | None]:
+    config = await ensure_guild_config(session, guild_id)
+    key = league_key(target)
+
+    if key == "default":
+        if not config.default_league_id:
+            raise ValueError("This server does not have a default League yet.")
+        league = await session.scalar(
+            select(GuildLeague).where(
+                GuildLeague.guild_id == guild_id,
+                GuildLeague.league_id == config.default_league_id,
+            )
+        )
+        return league, config.default_channel_id
+
+    if key == "all":
+        return None, config.all_channel_id
+
+    if key == "nearby":
+        raise ValueError("Nearby events do not have an auto-post channel.")
+
+    league = await resolve_guild_league(session, guild_id, target)
+    if league is None:
+        raise ValueError(f"Unknown League: {target}")
+
+    if league.league_id == config.default_league_id:
+        return league, config.default_channel_id
+
+    return league, league.channel_id or config.all_channel_id

@@ -4,6 +4,7 @@ import asyncio
 import logging
 import math
 from datetime import UTC, datetime
+from urllib.parse import urlparse
 
 import discord
 from discord import app_commands
@@ -20,6 +21,7 @@ from .guild_config import (
     guild_leagues,
     remove_guild_league,
     rename_guild_league,
+    resolve_event_channel,
     resolve_guild_league,
     set_default_league,
     set_event_channel,
@@ -120,21 +122,153 @@ class EventPagerView(discord.ui.View):
         )
 
 
-def _event_embed(event: Event) -> discord.Embed:
+def _safe_http_url(value: str | None) -> str | None:
+    if not value:
+        return None
+    url = value.strip()
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    return url
+
+
+def _official_event_url(event: Event) -> str | None:
+    url = _safe_http_url(event.source_url)
+    if not url:
+        return None
+
+    parsed = urlparse(url)
+    if "pokemon.com" not in parsed.netloc.casefold():
+        return None
+
+    path = parsed.path.rstrip("/").casefold()
+    if path.endswith("play-pokemon-tournaments"):
+        return None
+
+    return url
+
+
+def _game_label(game: str | None) -> str | None:
+    if not game:
+        return None
+
+    labels = {
+        "tcg": "Pokémon TCG",
+        "vgc": "Pokémon VGC",
+        "go": "Pokémon GO",
+    }
+    return labels.get(game.casefold(), game.upper())
+
+
+def _event_location(event: Event) -> str | None:
+    lines: list[str] = []
+
+    if event.venue_name:
+        lines.append(event.venue_name)
+
+    locality = ", ".join(
+        part for part in (event.city, event.postcode) if part
+    )
+    if locality and locality not in lines:
+        lines.append(locality)
+
+    if event.address:
+        address = event.address.strip()
+        if address and address not in lines:
+            lines.append(address)
+
+    return "\n".join(lines) if lines else None
+
+
+def _event_embed(
+    event: Event,
+    league_name: str | None = None,
+    *,
+    preview: bool = False,
+) -> discord.Embed:
+    official_url = _official_event_url(event)
+
+    description_lines = [
+        f"📅 {discord.utils.format_dt(event.starts_at, style='F')}",
+        f"⏳ {discord.utils.format_dt(event.starts_at, style='R')}",
+    ]
+    if preview:
+        description_lines.insert(0, "🧪 **Test preview — this is not a live announcement.**")
+
     embed = discord.Embed(
         title=event.title[:256],
-        url=event.source_url or None,
+        url=official_url,
+        description="\n".join(description_lines),
         timestamp=event.starts_at,
     )
-    if event.game:
-        embed.add_field(name="Game", value=event.game.upper(), inline=True)
+
+    game = _game_label(event.game)
+    if game:
+        embed.add_field(name="🎮 Game", value=game, inline=True)
+
     if event.event_type:
-        embed.add_field(name="Event", value=event.event_type, inline=True)
-    location = ", ".join(part for part in (event.venue_name, event.city) if part)
+        embed.add_field(
+            name="🏆 Event",
+            value=event.event_type[:1024],
+            inline=True,
+        )
+
+    if league_name:
+        embed.add_field(
+            name="🏠 League",
+            value=league_name[:1024],
+            inline=True,
+        )
+
+    location = _event_location(event)
     if location:
-        embed.add_field(name="Venue", value=location[:1024], inline=False)
-    embed.set_footer(text="PokEvent 3.0")
+        embed.add_field(
+            name="📍 Location",
+            value=location[:1024],
+            inline=False,
+        )
+
+    if official_url:
+        embed.add_field(
+            name="🔗 Official details",
+            value=f"[View this event on Pokémon]({official_url})",
+            inline=False,
+        )
+
+    embed.set_footer(text="PokEvent 3.0 · Play! Pokémon")
     return embed
+
+
+def _event_link_view(event: Event) -> discord.ui.View | None:
+    official_url = _official_event_url(event)
+    registration_url = _safe_http_url(event.registration_url)
+
+    if not official_url and not registration_url:
+        return None
+
+    view = discord.ui.View(timeout=None)
+
+    if official_url:
+        view.add_item(
+            discord.ui.Button(
+                label="View on Pokémon",
+                style=discord.ButtonStyle.link,
+                url=official_url,
+                emoji="🔗",
+            )
+        )
+
+    if registration_url and registration_url != official_url:
+        view.add_item(
+            discord.ui.Button(
+                label="Register",
+                style=discord.ButtonStyle.link,
+                url=registration_url,
+                emoji="📝",
+            )
+        )
+
+    return view
 
 
 bot = PokEventBot()
@@ -165,6 +299,14 @@ async def _publish_route(route: Route) -> None:
 
     now = datetime.now(UTC)
     async with SessionFactory() as session:
+        league = await session.scalar(
+            select(GuildLeague).where(
+                GuildLeague.guild_id == route.guild_id,
+                GuildLeague.league_id == route.upstream_organisation_id,
+            )
+        )
+        league_name = league.name if league is not None else None
+
         events = list(
             (
                 await session.scalars(
@@ -202,7 +344,10 @@ async def _publish_route(route: Route) -> None:
                     continue
 
                 try:
-                    message = await channel.send(embed=_event_embed(event))
+                    message = await channel.send(
+                        embed=_event_embed(event, league_name),
+                        view=_event_link_view(event),
+                    )
                 except (discord.Forbidden, discord.HTTPException):
                     log.exception(
                         "failed to publish event=%s route=%s",
@@ -235,10 +380,16 @@ async def _publish_route(route: Route) -> None:
 
             try:
                 message = await channel.fetch_message(int(published.message_id))
-                await message.edit(embed=_event_embed(event))
+                await message.edit(
+                    embed=_event_embed(event, league_name),
+                    view=_event_link_view(event),
+                )
             except discord.NotFound:
                 try:
-                    message = await channel.send(embed=_event_embed(event))
+                    message = await channel.send(
+                        embed=_event_embed(event, league_name),
+                        view=_event_link_view(event),
+                    )
                 except (discord.Forbidden, discord.HTTPException):
                     continue
                 published.message_id = str(message.id)
@@ -678,6 +829,100 @@ async def eventchannel_set(
 
 @eventchannel_set.autocomplete("target")
 async def eventchannel_set_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    return await _channel_target_autocomplete(interaction, current)
+
+
+@eventchannel_group.command(
+    name="test",
+    description="Send a preview of an automatic event announcement.",
+)
+@_admin_only
+@app_commands.describe(target="default, all, or a configured League")
+async def eventchannel_test(
+    interaction: discord.Interaction,
+    target: str,
+) -> None:
+    assert interaction.guild_id is not None
+    guild_id = str(interaction.guild_id)
+
+    try:
+        async with SessionFactory() as session:
+            league, channel_id = await resolve_event_channel(
+                session,
+                guild_id,
+                target,
+            )
+
+            if channel_id is None:
+                await session.commit()
+                await _send_error(
+                    interaction,
+                    "That target does not have an announcement channel configured.",
+                )
+                return
+
+            if league is None:
+                config = await ensure_guild_config(session, guild_id)
+                statement = (
+                    select(Event)
+                    .where(
+                        Event.starts_at >= datetime.now(UTC),
+                        Event.status == "active",
+                        Event.upstream_organisation_id
+                        != config.default_league_id,
+                    )
+                    .order_by(Event.starts_at)
+                    .limit(1)
+                )
+                league_name = "Configured League"
+            else:
+                statement = (
+                    select(Event)
+                    .where(
+                        Event.starts_at >= datetime.now(UTC),
+                        Event.status == "active",
+                        Event.upstream_organisation_id == league.league_id,
+                    )
+                    .order_by(Event.starts_at)
+                    .limit(1)
+                )
+                league_name = league.name
+
+            event = await session.scalar(statement)
+            await session.commit()
+
+        if event is None:
+            await _send_error(
+                interaction,
+                "I could not find an upcoming event to use as a preview.",
+            )
+            return
+
+        channel = await _discord_channel(channel_id)
+        if channel is None:
+            await _send_error(
+                interaction,
+                "I could not access the configured announcement channel.",
+            )
+            return
+
+        await channel.send(
+            embed=_event_embed(event, league_name, preview=True),
+            view=_event_link_view(event),
+        )
+        await interaction.response.send_message(
+            f"Sent a test event card to {channel.mention}.",
+            ephemeral=True,
+        )
+    except ValueError as exc:
+        await _send_error(interaction, str(exc))
+
+
+@eventchannel_test.autocomplete("target")
+async def eventchannel_test_autocomplete(
     interaction: discord.Interaction,
     current: str,
 ) -> list[app_commands.Choice[str]]:

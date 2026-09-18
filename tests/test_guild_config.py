@@ -134,3 +134,50 @@ async def test_removing_default_league_clears_default(monkeypatch) -> None:
     assert route is None
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_resolve_event_channel_uses_default_and_all_fallback(monkeypatch) -> None:
+    from pokevent.guild_config import resolve_event_channel
+
+    monkeypatch.setattr(
+        guild_config.settings,
+        "leagues",
+        {
+            "2012924": "Pokémon League Swindon",
+            "5683200": "Bath TCG",
+        },
+    )
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    async with sessions() as session:
+        await ensure_guild_config(session, "guild-1")
+        await set_default_league(session, "guild-1", "Pokémon League Swindon")
+        await set_event_channel(session, "guild-1", "default", "100")
+        await set_event_channel(session, "guild-1", "all", "200")
+        await session.commit()
+
+    async with sessions() as session:
+        default_league, default_channel = await resolve_event_channel(
+            session,
+            "guild-1",
+            "default",
+        )
+        bath_league, bath_channel = await resolve_event_channel(
+            session,
+            "guild-1",
+            "Bath TCG",
+        )
+
+    assert default_league is not None
+    assert default_league.league_id == "2012924"
+    assert default_channel == "100"
+    assert bath_league is not None
+    assert bath_league.league_id == "5683200"
+    assert bath_channel == "200"
+
+    await engine.dispose()
