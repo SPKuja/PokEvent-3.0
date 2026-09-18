@@ -1439,12 +1439,12 @@ class SetupDashboardView(discord.ui.View):
 class AddLeagueModal(discord.ui.Modal, title="Add Play! Pokémon League"):
     name_input = discord.ui.TextInput(
         label="League name",
-        placeholder="e.g. Bath TCG",
+        placeholder="e.g. Example Pokémon League",
         max_length=100,
     )
     league_id_input = discord.ui.TextInput(
         label="League ID",
-        placeholder="e.g. 5683200",
+        placeholder="e.g. 1234567",
         max_length=64,
     )
 
