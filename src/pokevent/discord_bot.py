@@ -1470,23 +1470,22 @@ class SetupDashboardView(discord.ui.View):
 
 
 class EventTypeSelect(discord.ui.Select):
-    DESCRIPTIONS = {
-        "League Session": "Routine recurring League play",
-        "Friendly Tournament": "Named non-premier tournament",
-        "League Challenge": "Premier local League Challenge",
-        "League Cup": "Premier local League Cup",
-        "Pre-Release": "Set prerelease event",
-        "Playtime": "Casual organised play",
-        "Other / Unknown": "New or unrecognised event type",
-    }
-
     def __init__(self, manager: EventTypeManagerView) -> None:
         self.manager = manager
+        descriptions = {
+            "League Session": "Routine recurring League play",
+            "Friendly Tournament": "Named non-premier tournament",
+            "League Challenge": "Premier local League Challenge",
+            "League Cup": "Premier local League Cup",
+            "Pre-Release": "Set prerelease event",
+            "Playtime": "Casual organised play",
+            "Other / Unknown": "New or unrecognised event type",
+        }
         options = [
             discord.SelectOption(
                 label=event_type,
                 value=event_type,
-                description=self.DESCRIPTIONS[event_type],
+                description=descriptions[event_type],
                 default=event_type in manager.enabled,
             )
             for event_type in CARD_EVENT_TYPES
@@ -1561,8 +1560,10 @@ class EventTypeManagerView(discord.ui.View):
     def content(self, notice: str | None = None) -> str:
         lines = [
             "## 🎟️ Announcement Card Types",
-            "Choose which event categories create full announcement cards and "
-            "discussion threads.",
+            (
+                "Choose which event categories create full announcement cards "
+                "and discussion threads."
+            ),
             "",
         ]
         lines.extend(
@@ -1572,10 +1573,14 @@ class EventTypeManagerView(discord.ui.View):
         lines.extend(
             [
                 "",
-                "-# The pinned Upcoming Events summary and /events still show all "
-                "configured events, including League Sessions.",
-                "-# Changing this affects future auto-posts and backfill; it does not "
-                "delete cards that were already posted.",
+                (
+                    "-# The pinned Upcoming Events summary and /events still show all "
+                    "configured events, including League Sessions."
+                ),
+                (
+                    "-# Changing this affects future auto-posts and backfill; it does "
+                    "not delete cards that were already posted."
+                ),
             ]
         )
         if notice:
