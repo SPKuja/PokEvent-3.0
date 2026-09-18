@@ -2,8 +2,8 @@ from datetime import UTC, datetime
 
 from pokevent.discord_bot import (
     EVENTS_PAGE_SIZE,
-    _event_embed,
     _event_cleanup_at,
+    _event_embed,
     _event_link_view,
     _event_location,
     _official_event_url,
