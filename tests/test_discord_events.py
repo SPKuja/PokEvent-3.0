@@ -3,9 +3,11 @@ from datetime import UTC, datetime
 from pokevent.discord_bot import (
     EVENTS_PAGE_SIZE,
     _event_embed,
+    _event_cleanup_at,
     _event_link_view,
     _event_location,
     _official_event_url,
+    _thread_name,
     event_page_content,
 )
 from pokevent.models import Event
@@ -90,3 +92,53 @@ def test_generic_pokemon_locator_url_is_not_used_as_event_link() -> None:
 
     assert _official_event_url(event) is None
     assert _event_link_view(event) is None
+
+
+def test_event_thread_name_is_bounded_to_discord_limit() -> None:
+    event = _event(0)
+    event.title = "Very long event title " * 20
+
+    name = _thread_name(event)
+
+    assert name.startswith("Event discussion · ")
+    assert len(name) <= 100
+
+
+def test_event_cleanup_uses_fallback_duration_and_grace(monkeypatch) -> None:
+    from pokevent import discord_bot
+
+    monkeypatch.setattr(discord_bot.settings, "event_default_duration_hours", 8)
+    monkeypatch.setattr(discord_bot.settings, "event_cleanup_grace_hours", 2)
+
+    event = _event(0)
+    event.starts_at = datetime(2026, 9, 20, 10, 0, tzinfo=UTC)
+    event.ends_at = None
+
+    assert _event_cleanup_at(event) == datetime(
+        2026,
+        9,
+        20,
+        20,
+        0,
+        tzinfo=UTC,
+    )
+
+
+def test_event_cleanup_prefers_known_end_time(monkeypatch) -> None:
+    from pokevent import discord_bot
+
+    monkeypatch.setattr(discord_bot.settings, "event_default_duration_hours", 8)
+    monkeypatch.setattr(discord_bot.settings, "event_cleanup_grace_hours", 2)
+
+    event = _event(0)
+    event.starts_at = datetime(2026, 9, 20, 10, 0, tzinfo=UTC)
+    event.ends_at = datetime(2026, 9, 20, 15, 30, tzinfo=UTC)
+
+    assert _event_cleanup_at(event) == datetime(
+        2026,
+        9,
+        20,
+        17,
+        30,
+        tzinfo=UTC,
+    )

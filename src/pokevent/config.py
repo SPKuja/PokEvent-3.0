@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     sync_interval_minutes: int = 180
     sync_guild_commands: bool = True
 
+    create_event_threads: bool = True
+    event_default_duration_hours: int = 8
+    event_cleanup_grace_hours: int = 2
+
 
 @lru_cache
 def get_settings() -> Settings:

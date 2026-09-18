@@ -4,7 +4,7 @@ import asyncio
 import logging
 import math
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 
 import discord
@@ -49,6 +49,8 @@ class PokEventBot(commands.Bot):
             await self.tree.sync()
         if not publish_event_routes.is_running():
             publish_event_routes.start()
+        if not cleanup_expired_event_posts.is_running():
+            cleanup_expired_event_posts.start()
 
     async def _sync_commands_to_guild(self, guild: discord.Guild) -> None:
         if not settings.sync_guild_commands or guild.id in self._synced_guild_ids:
@@ -364,6 +366,91 @@ async def _discord_channel(channel_id: str) -> discord.TextChannel | None:
     return channel if isinstance(channel, discord.TextChannel) else None
 
 
+def _thread_name(event: Event) -> str:
+    prefix = "Event discussion · "
+    available = max(1, 100 - len(prefix))
+    return f"{prefix}{event.title[:available]}"
+
+
+async def _create_event_thread(
+    message: discord.Message,
+    event: Event,
+) -> discord.Thread | None:
+    if not settings.create_event_threads:
+        return None
+
+    try:
+        return await message.create_thread(
+            name=_thread_name(event),
+            auto_archive_duration=1440,
+            reason="PokEvent event discussion thread",
+        )
+    except (discord.Forbidden, discord.HTTPException):
+        log.exception(
+            "failed to create event thread message=%s event=%s",
+            message.id,
+            event.id,
+        )
+        return None
+
+
+def _event_cleanup_at(event: Event) -> datetime:
+    if event.ends_at is not None and event.ends_at > event.starts_at:
+        event_end = event.ends_at
+    else:
+        event_end = event.starts_at + timedelta(
+            hours=settings.event_default_duration_hours
+        )
+
+    return event_end + timedelta(hours=settings.event_cleanup_grace_hours)
+
+
+async def _delete_thread(thread_id: str | None) -> None:
+    if not thread_id:
+        return
+
+    channel = bot.get_channel(int(thread_id))
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(int(thread_id))
+        except discord.NotFound:
+            return
+        except (discord.Forbidden, discord.HTTPException):
+            log.exception("failed to fetch event thread=%s for cleanup", thread_id)
+            return
+
+    if not isinstance(channel, discord.Thread):
+        return
+
+    try:
+        await channel.delete(reason="PokEvent event has finished")
+    except discord.NotFound:
+        return
+    except (discord.Forbidden, discord.HTTPException):
+        log.exception("failed to delete event thread=%s", thread_id)
+
+
+async def _delete_published_message(
+    published: PublishedMessage,
+) -> None:
+    await _delete_thread(published.thread_id)
+
+    channel = await _discord_channel(published.channel_id)
+    if channel is None:
+        return
+
+    try:
+        message = await channel.fetch_message(int(published.message_id))
+        await message.delete()
+    except discord.NotFound:
+        return
+    except (discord.Forbidden, discord.HTTPException):
+        log.exception(
+            "failed to delete expired event message=%s",
+            published.message_id,
+        )
+
+
 async def _publish_route(route: Route) -> None:
     if route.baseline_at is None or route.upstream_organisation_id is None:
         return
@@ -419,6 +506,7 @@ async def _publish_route(route: Route) -> None:
                         embed=_event_embed(event, league_name),
                         view=_event_link_view(event),
                     )
+                    thread = await _create_event_thread(message, event)
                 except (discord.Forbidden, discord.HTTPException):
                     log.exception(
                         "failed to publish event=%s route=%s",
@@ -434,6 +522,7 @@ async def _publish_route(route: Route) -> None:
                         guild_id=route.guild_id,
                         channel_id=str(channel.id),
                         message_id=str(message.id),
+                        thread_id=str(thread.id) if thread is not None else None,
                         last_content_hash=event.content_hash,
                     )
                 )
@@ -461,10 +550,14 @@ async def _publish_route(route: Route) -> None:
                         embed=_event_embed(event, league_name),
                         view=_event_link_view(event),
                     )
+                    thread = await _create_event_thread(message, event)
                 except (discord.Forbidden, discord.HTTPException):
                     continue
                 published.message_id = str(message.id)
                 published.channel_id = str(channel.id)
+                published.thread_id = (
+                    str(thread.id) if thread is not None else None
+                )
             except (discord.Forbidden, discord.HTTPException):
                 log.exception(
                     "failed to update event=%s route=%s",
@@ -494,6 +587,39 @@ async def publish_event_routes() -> None:
 
     for route in routes:
         await _publish_route(route)
+
+
+@tasks.loop(minutes=15)
+async def cleanup_expired_event_posts() -> None:
+    now = datetime.now(UTC)
+
+    async with SessionFactory() as session:
+        rows = list(
+            (
+                await session.execute(
+                    select(PublishedMessage, Event)
+                    .join(Event, PublishedMessage.event_id == Event.id)
+                )
+            ).all()
+        )
+
+        expired: list[PublishedMessage] = []
+        for published, event in rows:
+            if _event_cleanup_at(event) <= now:
+                expired.append(published)
+
+        for published in expired:
+            await _delete_published_message(published)
+            await session.delete(published)
+
+        if expired:
+            await session.commit()
+            log.info("removed %s expired Discord event posts", len(expired))
+
+
+@cleanup_expired_event_posts.before_loop
+async def before_cleanup_expired_event_posts() -> None:
+    await bot.wait_until_ready()
 
 
 @publish_event_routes.before_loop
@@ -870,11 +996,20 @@ async def eventchannel_set(
         return
 
     permissions = resolved_channel.permissions_for(bot_member)
-    if not permissions.view_channel or not permissions.send_messages:
+    required_permissions = {
+        "View Channel": permissions.view_channel,
+        "Send Messages": permissions.send_messages,
+        "Create Public Threads": permissions.create_public_threads,
+        "Manage Threads": permissions.manage_threads,
+    }
+    missing_permissions = [
+        name for name, allowed in required_permissions.items() if not allowed
+    ]
+    if missing_permissions:
         await _send_error(
             interaction,
-            f"I need **View Channel** and **Send Messages** permission in "
-            f"{resolved_channel.mention}.",
+            f"I need these permissions in {resolved_channel.mention}: "
+            f"**{', '.join(missing_permissions)}**.",
         )
         return
 

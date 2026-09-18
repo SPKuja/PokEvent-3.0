@@ -183,6 +183,7 @@ class PublishedMessage(Base):
     guild_id: Mapped[str] = mapped_column(String(32), nullable=False)
     channel_id: Mapped[str] = mapped_column(String(32), nullable=False)
     message_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    thread_id: Mapped[str | None] = mapped_column(String(32))
     last_content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
