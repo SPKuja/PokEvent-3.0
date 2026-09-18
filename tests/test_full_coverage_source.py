@@ -63,7 +63,7 @@ def test_parser_classifies_all_three_games() -> None:
     assert tcg.game is Game.TCG
     assert vgc.game is Game.VGC
     assert go.game is Game.GO
-    assert tcg.event_type == "League / Friendly"
+    assert tcg.event_type == "League Session"
     assert vgc.event_type == "League / Friendly"
     assert go.event_type == "League / Friendly"
 
