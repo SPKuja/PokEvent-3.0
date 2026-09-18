@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from .catalogue import upsert_snapshots
 from .config import get_settings
 from .db import SessionFactory
-from .domain import EventSearch
+from .domain import EventSearch, EventSnapshot
 from .sources.pokedata import PokedataSource
 
 log = logging.getLogger("pokevent.worker")
@@ -20,6 +20,18 @@ def build_source() -> PokedataSource:
     raise RuntimeError(f"Unsupported POKEVENT_EVENT_SOURCE: {settings.event_source}")
 
 
+def apply_league_registry(snapshot: EventSnapshot) -> EventSnapshot:
+    league_id = snapshot.upstream_organisation_id
+    if not league_id:
+        return snapshot
+
+    configured_name = settings.leagues.get(league_id)
+    if not configured_name:
+        return snapshot
+
+    return snapshot.model_copy(update={"organisation_name": configured_name})
+
+
 async def sync_once() -> None:
     source = build_source()
     search = EventSearch(
@@ -28,7 +40,10 @@ async def sync_once() -> None:
         radius_miles=settings.default_radius_miles,
         starts_after=datetime.now(UTC),
     )
-    snapshots = await source.fetch_events(search)
+    snapshots = [
+        apply_league_registry(snapshot)
+        for snapshot in await source.fetch_events(search)
+    ]
 
     async with SessionFactory() as session:
         result = await upsert_snapshots(session, snapshots)
