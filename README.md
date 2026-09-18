@@ -2,26 +2,81 @@
 
 PokEvent 3.0 is a community-first Pokémon event discovery and publishing platform.
 
-Its goal is to keep players informed about sanctioned Play! Pokémon events in and around their local community, while giving Discord server owners fine-grained control over which League or venue events are posted to which channels.
+Play! Pokémon is the primary event source. PokEvent normalises events into one
+local catalogue, then publishes that catalogue to Discord, a public web/API
+surface and subscribable iCalendar feeds.
 
-## 3.0 direction
+## Why 3.0
 
-- Play! Pokémon is the primary event source.
-- Events are normalised into a local catalogue before being published anywhere.
-- Discord is an output, not the source of truth.
-- Server owners can route events by League/Activity Group, venue/location, game and distance.
-- A public web calendar and subscribable iCalendar feeds expose the same catalogue.
-- The ingestion layer is isolated so Pokémon website/API changes do not infect the rest of the application.
+PokEvent 3.0 removes Facebook from the event pipeline. Discord is no longer the
+database either: it is one output of the central catalogue.
 
-## Initial milestone
+A Discord server can route:
 
-1. Establish the application, database and configuration foundation.
-2. Investigate and implement reliable Play! Pokémon event ingestion.
-3. Preserve stable upstream identifiers for events, organisers/Activity Groups and locations.
-4. Add Discord guild configuration and event-routing rules.
-5. Add event announcements, updates and commands.
-6. Add the public calendar and iCalendar feeds.
+- one League / Activity Group to one channel;
+- one Play! Pokémon location/store to one channel;
+- a game such as TCG, VGC or GO;
+- all matching events inside a geographic radius.
 
-## Status
+This lets a League route its own events to one channel while a wider community
+server can surface every sanctioned event around Swindon.
 
-Early 3.0 development.
+## Current status
+
+The 3.0 foundation is in active development.
+
+Implemented in the foundation:
+
+- normalised event, organisation, guild, route and published-message schema;
+- stable upstream IDs kept separately from PokEvent-owned IDs;
+- pure routing engine for organisation, location, game and distance;
+- Discord bot bootstrap with `/events` and `/pokevent status`;
+- FastAPI health/event API;
+- public iCalendar feed;
+- PostgreSQL Docker deployment;
+- Alembic migrations;
+- isolated Play! Pokémon source adapter.
+
+The Play! Pokémon ingestion adapter is intentionally not scraping the rendered
+Event Locator. Its underlying event data interface and stable organisation /
+location identifiers need to be verified first.
+
+## Development
+
+Copy the environment file:
+
+```bash
+cp .env.example .env
+```
+
+For local SQLite development:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+alembic upgrade head
+pytest
+pokevent-web
+```
+
+Run the Discord bot separately after adding a Discord token:
+
+```bash
+pokevent-bot
+```
+
+## Docker / Portainer
+
+Set a strong `POSTGRES_PASSWORD` and `POKEVENT_DISCORD_TOKEN` in `.env`, then:
+
+```bash
+docker compose up -d --build
+```
+
+The stack starts PostgreSQL, runs database migrations once, then starts the web
+and bot services.
+
+## Architecture
+
+See [docs/architecture.md](docs/architecture.md).
