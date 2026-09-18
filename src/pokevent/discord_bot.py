@@ -1123,15 +1123,14 @@ async def _validate_announcement_channel(
     if missing:
         return (
             None,
-            f"I need these permissions in {resolved.mention}: "
-            f"**{', '.join(missing)}**.",
+            f"I need these permissions in {resolved.mention}: **{', '.join(missing)}**.",
         )
 
     return resolved, None
 
 
 class SetupLeagueSelect(discord.ui.Select):
-    def __init__(self, wizard: "SetupWizard") -> None:
+    def __init__(self, wizard: SetupWizard) -> None:
         self.wizard = wizard
         options = [
             discord.SelectOption(
@@ -1154,7 +1153,7 @@ class SetupLeagueSelect(discord.ui.Select):
 
 
 class SetupChannelSelect(discord.ui.ChannelSelect):
-    def __init__(self, wizard: "SetupWizard", purpose: str) -> None:
+    def __init__(self, wizard: SetupWizard, purpose: str) -> None:
         self.wizard = wizard
         self.purpose = purpose
         placeholder = (
@@ -1181,7 +1180,7 @@ class SetupChannelSelect(discord.ui.ChannelSelect):
 class SetupActionButton(discord.ui.Button):
     def __init__(
         self,
-        wizard: "SetupWizard",
+        wizard: SetupWizard,
         action: str,
         label: str,
         style: discord.ButtonStyle,
@@ -1195,7 +1194,7 @@ class SetupActionButton(discord.ui.Button):
 
 
 class SetupBackfillButton(discord.ui.Button):
-    def __init__(self, wizard: "SetupWizard", count: int) -> None:
+    def __init__(self, wizard: SetupWizard, count: int) -> None:
         self.wizard = wizard
         self.count = count
         label = "No full cards" if count == 0 else f"Post next {count}"
