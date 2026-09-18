@@ -4,10 +4,10 @@ Revision ID: 0001
 Revises:
 """
 
-from typing import Sequence
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision: str = "0001"
 down_revision: str | Sequence[str] | None = None

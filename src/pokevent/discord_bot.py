@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import discord
 from discord import app_commands
@@ -40,7 +40,7 @@ async def status(interaction: discord.Interaction) -> None:
 
 @bot.tree.command(name="events", description="Show the next Pokémon events in the catalogue.")
 async def events(interaction: discord.Interaction) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     async with SessionFactory() as session:
         rows = (
             await session.scalars(

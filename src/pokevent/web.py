@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import uvicorn
 from fastapi import FastAPI, Response
-from icalendar import Calendar, Event as CalendarEvent
+from icalendar import Calendar
+from icalendar import Event as CalendarEvent
 from sqlalchemy import select, text
 
 from . import __version__
@@ -25,7 +26,7 @@ async def health() -> dict[str, str]:
 
 @app.get("/api/events")
 async def upcoming_events(limit: int = 100) -> list[dict]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     async with SessionFactory() as session:
         rows = (
             await session.scalars(
@@ -53,7 +54,7 @@ async def upcoming_events(limit: int = 100) -> list[dict]:
 
 @app.get("/calendar.ics")
 async def calendar_feed() -> Response:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     async with SessionFactory() as session:
         rows = (
             await session.scalars(

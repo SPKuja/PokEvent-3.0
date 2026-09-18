@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from pokevent.domain import EventSnapshot, Game
 from pokevent.routing import RouteCriteria, matches_route
@@ -12,7 +12,7 @@ def event(**overrides) -> EventSnapshot:
         "upstream_location_id": "atomic-swindon",
         "title": "League Challenge",
         "game": Game.TCG,
-        "starts_at": datetime(2026, 10, 10, 10, 0, tzinfo=timezone.utc),
+        "starts_at": datetime(2026, 10, 10, 10, 0, tzinfo=UTC),
         "latitude": 51.56,
         "longitude": -1.78,
     }
