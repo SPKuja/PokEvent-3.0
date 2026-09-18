@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from . import __version__
 from .config import get_settings
-from .db import SessionFactory, initialise_database
+from .db import SessionFactory
 from .models import Event
 
 settings = get_settings()
@@ -23,7 +23,6 @@ class PokEventBot(commands.Bot):
         super().__init__(command_prefix=commands.when_mentioned, intents=intents)
 
     async def setup_hook(self) -> None:
-        await initialise_database()
         await self.tree.sync()
 
 

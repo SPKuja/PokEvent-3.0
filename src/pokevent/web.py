@@ -5,24 +5,21 @@ from datetime import datetime, timezone
 import uvicorn
 from fastapi import FastAPI, Response
 from icalendar import Calendar, Event as CalendarEvent
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from . import __version__
 from .config import get_settings
-from .db import SessionFactory, initialise_database
+from .db import SessionFactory
 from .models import Event
 
 settings = get_settings()
 app = FastAPI(title="PokEvent", version=__version__)
 
 
-@app.on_event("startup")
-async def startup() -> None:
-    await initialise_database()
-
-
 @app.get("/health")
 async def health() -> dict[str, str]:
+    async with SessionFactory() as session:
+        await session.execute(text("SELECT 1"))
     return {"status": "ok", "version": __version__}
 
 
