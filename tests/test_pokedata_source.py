@@ -5,7 +5,7 @@ import pytest
 
 from pokevent.domain import EventSearch, Game
 from pokevent.routing import RouteCriteria, matches_route
-from pokevent.sources.pokedata import PokedataSource, parse_pokedata_event
+from pokevent.sources.pokedata import (\n    PokedataSource,\n    parse_pokedata_event,\n)
 
 
 SWINDON_SHAPE_FIXTURE = {
