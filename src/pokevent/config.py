@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     # Stable Play! Pokémon League IDs mapped to human-friendly names.
     # Discord routing and organisation identity use the ID; the name is display only.
     leagues: dict[str, str] = Field(default_factory=dict)
+    # Optional League ID -> public logo URL mapping for the web calendar.
+    league_logos: dict[str, str] = Field(default_factory=dict)
 
     # Service-level discovery area. Discord server owners do not configure this.
     home_name: str = "Swindon"
