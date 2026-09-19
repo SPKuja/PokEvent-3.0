@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import json
 import logging
 import math
@@ -11,6 +12,7 @@ from urllib.parse import urlparse
 
 import discord
 from discord import app_commands
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 from discord.ext import commands, tasks
 from sqlalchemy import or_, select
 
@@ -48,6 +50,7 @@ class PokEventBot(commands.Bot):
     def __init__(self) -> None:
         intents = discord.Intents.none()
         intents.guilds = True
+        intents.members = settings.enable_member_welcomes
         super().__init__(command_prefix=commands.when_mentioned, intents=intents)
         self._synced_guild_ids: set[int] = set()
         self._global_commands_removed = False
@@ -109,6 +112,18 @@ class PokEventBot(commands.Bot):
             await self._sync_commands_to_guild(guild)
         except discord.HTTPException:
             log.exception("failed to sync commands to new guild=%s", guild.id)
+
+    async def on_member_join(self, member: discord.Member) -> None:
+        if not settings.enable_member_welcomes or member.bot:
+            return
+        try:
+            await _send_member_welcome(member)
+        except Exception:
+            log.exception(
+                "failed to send member welcome guild=%s member=%s",
+                member.guild.id,
+                member.id,
+            )
 
 
 def _event_line(event: Event) -> str:
@@ -372,6 +387,255 @@ def _event_link_view(event: Event) -> discord.ui.View | None:
         )
 
     return view
+
+
+DEFAULT_WELCOME_MESSAGE = "Welcome {member} to **{server}**! 👋"
+
+
+def _event_announcement_mentions(
+    config,
+    channel: discord.TextChannel,
+) -> tuple[str | None, discord.AllowedMentions]:
+    mode = (config.event_mention_mode or "none").casefold()
+    bot_member = channel.guild.me
+    permissions = (
+        channel.permissions_for(bot_member)
+        if bot_member is not None
+        else None
+    )
+
+    if mode == "everyone":
+        if permissions is not None and permissions.mention_everyone:
+            return (
+                "@everyone",
+                discord.AllowedMentions(
+                    everyone=True,
+                    roles=False,
+                    users=False,
+                    replied_user=False,
+                ),
+            )
+        return None, discord.AllowedMentions.none()
+
+    if mode == "roles":
+        roles: list[discord.Role] = []
+        for role_id in config.event_mention_role_ids or []:
+            try:
+                role = channel.guild.get_role(int(role_id))
+            except (TypeError, ValueError):
+                role = None
+            if role is None or role.is_default():
+                continue
+            if role.mentionable or (
+                permissions is not None and permissions.mention_everyone
+            ):
+                roles.append(role)
+
+        if roles:
+            return (
+                " ".join(role.mention for role in roles),
+                discord.AllowedMentions(
+                    everyone=False,
+                    roles=roles,
+                    users=False,
+                    replied_user=False,
+                ),
+            )
+
+    return None, discord.AllowedMentions.none()
+
+
+def _welcome_message(member: discord.Member, template: str | None) -> str:
+    message = (template or DEFAULT_WELCOME_MESSAGE).strip() or DEFAULT_WELCOME_MESSAGE
+    return (
+        message.replace("{member}", member.mention)
+        .replace("{display_name}", member.display_name)
+        .replace("{server}", member.guild.name)
+    )[:2000]
+
+
+def _banner_text(text: str, limit: int) -> str:
+    cleaned = re.sub(r"\s+", " ", text).strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return f"{cleaned[: max(1, limit - 1)]}…"
+
+
+def _render_welcome_banner(
+    *,
+    member_name: str,
+    server_name: str,
+    avatar_bytes: bytes | None = None,
+    guild_icon_bytes: bytes | None = None,
+) -> io.BytesIO:
+    width, height = 1200, 400
+
+    if guild_icon_bytes:
+        try:
+            with Image.open(io.BytesIO(guild_icon_bytes)) as source:
+                background = ImageOps.fit(
+                    source.convert("RGB"),
+                    (width, height),
+                    method=Image.Resampling.LANCZOS,
+                ).filter(ImageFilter.GaussianBlur(radius=22))
+        except (OSError, ValueError):
+            background = Image.new("RGB", (width, height), (37, 42, 54))
+    else:
+        background = Image.new("RGB", (width, height), (37, 42, 54))
+
+    canvas = background.convert("RGBA")
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 130))
+    canvas = Image.alpha_composite(canvas, overlay)
+
+    avatar_size = 230
+    avatar_x = 70
+    avatar_y = (height - avatar_size) // 2
+    if avatar_bytes:
+        try:
+            with Image.open(io.BytesIO(avatar_bytes)) as source:
+                avatar = ImageOps.fit(
+                    source.convert("RGBA"),
+                    (avatar_size, avatar_size),
+                    method=Image.Resampling.LANCZOS,
+                )
+            mask = Image.new("L", (avatar_size, avatar_size), 0)
+            ImageDraw.Draw(mask).ellipse(
+                (0, 0, avatar_size - 1, avatar_size - 1),
+                fill=255,
+            )
+            ring = Image.new("RGBA", (avatar_size + 12, avatar_size + 12), (0, 0, 0, 0))
+            ImageDraw.Draw(ring).ellipse(
+                (0, 0, avatar_size + 11, avatar_size + 11),
+                fill=(255, 255, 255, 225),
+            )
+            canvas.alpha_composite(ring, (avatar_x - 6, avatar_y - 6))
+            canvas.paste(avatar, (avatar_x, avatar_y), mask)
+        except (OSError, ValueError):
+            avatar_bytes = None
+
+    if not avatar_bytes:
+        placeholder = Image.new("RGBA", (avatar_size, avatar_size), (255, 255, 255, 35))
+        placeholder_mask = Image.new("L", (avatar_size, avatar_size), 0)
+        ImageDraw.Draw(placeholder_mask).ellipse(
+            (0, 0, avatar_size - 1, avatar_size - 1),
+            fill=255,
+        )
+        canvas.paste(placeholder, (avatar_x, avatar_y), placeholder_mask)
+
+    draw = ImageDraw.Draw(canvas)
+    title_font = ImageFont.load_default(size=34)
+    member_font = ImageFont.load_default(size=62)
+    server_font = ImageFont.load_default(size=30)
+
+    text_x = 350
+    draw.text(
+        (text_x, 105),
+        "WELCOME TO",
+        font=title_font,
+        fill=(255, 255, 255, 210),
+    )
+    draw.text(
+        (text_x, 155),
+        _banner_text(member_name, 30),
+        font=member_font,
+        fill=(255, 255, 255, 255),
+    )
+    draw.text(
+        (text_x, 245),
+        _banner_text(server_name, 42),
+        font=server_font,
+        fill=(255, 255, 255, 225),
+    )
+
+    output = io.BytesIO()
+    canvas.convert("RGB").save(output, format="PNG", optimize=True)
+    output.seek(0)
+    return output
+
+
+async def _welcome_banner_file(member: discord.Member) -> discord.File:
+    avatar_bytes: bytes | None = None
+    guild_icon_bytes: bytes | None = None
+
+    try:
+        avatar_bytes = await member.display_avatar.read()
+    except (discord.HTTPException, OSError):
+        pass
+
+    if member.guild.icon is not None:
+        try:
+            guild_icon_bytes = await member.guild.icon.read()
+        except (discord.HTTPException, OSError):
+            pass
+
+    buffer = _render_welcome_banner(
+        member_name=member.display_name,
+        server_name=member.guild.name,
+        avatar_bytes=avatar_bytes,
+        guild_icon_bytes=guild_icon_bytes,
+    )
+    return discord.File(buffer, filename="pokevent-welcome.png")
+
+
+async def _send_member_welcome(
+    member: discord.Member,
+    *,
+    preview: bool = False,
+) -> bool:
+    async with SessionFactory() as session:
+        config = await ensure_guild_config(session, str(member.guild.id))
+        mode = (config.welcome_mode or "off").casefold()
+        channel_id = config.welcome_channel_id
+        template = config.welcome_message
+        await session.commit()
+
+    if mode not in {"text", "image"} or not channel_id:
+        return False
+
+    channel = await _discord_channel(channel_id)
+    if channel is None or channel.guild.id != member.guild.id:
+        return False
+
+    bot_member = channel.guild.me
+    if bot_member is None:
+        return False
+    permissions = channel.permissions_for(bot_member)
+    if not permissions.view_channel or not permissions.send_messages:
+        return False
+    if mode == "image" and not permissions.attach_files:
+        return False
+
+    content = _welcome_message(member, template)
+    if preview:
+        content = f"-# 🧪 Test welcome preview\n{content}"
+
+    allowed_mentions = discord.AllowedMentions(
+        everyone=False,
+        roles=False,
+        users=[member],
+        replied_user=False,
+    )
+
+    try:
+        if mode == "image":
+            await channel.send(
+                content=content,
+                file=await _welcome_banner_file(member),
+                allowed_mentions=allowed_mentions,
+            )
+        else:
+            await channel.send(
+                content=content,
+                allowed_mentions=allowed_mentions,
+            )
+        return True
+    except (discord.Forbidden, discord.HTTPException):
+        log.exception(
+            "failed to send welcome guild=%s member=%s",
+            member.guild.id,
+            member.id,
+        )
+        return False
 
 
 def _event_snapshot(event: Event) -> dict:
@@ -1095,10 +1359,16 @@ async def _publish_route(route: Route) -> None:
                     )
                     continue
 
+                mention_content, allowed_mentions = _event_announcement_mentions(
+                    config,
+                    channel,
+                )
                 try:
                     message = await channel.send(
+                        content=mention_content,
                         embed=_event_embed(event, league_name),
                         view=_event_link_view(event),
+                        allowed_mentions=allowed_mentions,
                     )
                     thread = await _create_event_thread(message, event)
                 except (discord.Forbidden, discord.HTTPException):
@@ -1416,6 +1686,20 @@ async def _setup_dashboard_content(
     ready = bool(config.default_league_id and config.default_channel_id)
     status = "✅ Ready" if ready else "⚠️ Setup incomplete"
     enabled_card_types = effective_card_event_types(config.card_event_types)
+    mention_mode = (config.event_mention_mode or "none").casefold()
+    mention_label = {
+        "none": "None",
+        "everyone": "@everyone",
+        "roles": "Selected roles",
+    }.get(mention_mode, "None")
+    welcome_mode = (config.welcome_mode or "off").casefold()
+    welcome_label = {
+        "off": "Off",
+        "text": "Text",
+        "image": "Image banner",
+    }.get(welcome_mode, "Off")
+    if welcome_mode != "off" and not settings.enable_member_welcomes:
+        welcome_label += " · gateway intent disabled"
 
     league_names = ", ".join(league.name for league in leagues[:6]) or "None"
     if len(leagues) > 6:
@@ -1429,6 +1713,8 @@ async def _setup_dashboard_content(
         f"**Other configured Leagues:** {other_channel}",
         f"**Configured Leagues:** {len(leagues)} · {league_names}",
         f"**Announcement card types:** {len(enabled_card_types)}/{len(CARD_EVENT_TYPES)} enabled",
+        f"**New-event notifications:** {mention_label}",
+        f"**Member welcomes:** {welcome_label}",
         "",
     ]
     if notice:
@@ -1550,8 +1836,10 @@ class SetupDashboardView(discord.ui.View):
         self.add_item(SetupDashboardButton(self, "add", "Add League", row=0))
         self.add_item(SetupDashboardButton(self, "manage", "Manage Leagues", row=0))
         self.add_item(SetupDashboardButton(self, "channels", "Channels", row=0))
+        self.add_item(SetupDashboardButton(self, "notifications", "Notifications", row=0))
         self.add_item(SetupDashboardButton(self, "types", "Event Types", row=1))
         self.add_item(SetupDashboardButton(self, "posts", "Event Posts", row=1))
+        self.add_item(SetupDashboardButton(self, "welcomes", "Welcomes", row=1))
         self.add_item(SetupDashboardButton(self, "refresh", "Refresh Summary", row=1))
         self.add_item(SetupDashboardButton(self, "close", "Close", row=1))
 
@@ -1620,6 +1908,39 @@ class SetupDashboardView(discord.ui.View):
             )
             await interaction.response.edit_message(
                 content=await view.content(),
+                view=view,
+            )
+            return
+
+        if action == "notifications":
+            async with SessionFactory() as session:
+                config = await ensure_guild_config(session, self.guild_id)
+                await session.commit()
+            view = EventNotificationManagerView(
+                invoker_id=self.invoker_id,
+                guild_id=self.guild_id,
+                mode=(config.event_mention_mode or "none"),
+                role_ids=set(config.event_mention_role_ids or []),
+            )
+            await interaction.response.edit_message(
+                content=view.content(),
+                view=view,
+            )
+            return
+
+        if action == "welcomes":
+            async with SessionFactory() as session:
+                config = await ensure_guild_config(session, self.guild_id)
+                await session.commit()
+            view = WelcomeManagerView(
+                invoker_id=self.invoker_id,
+                guild_id=self.guild_id,
+                mode=(config.welcome_mode or "off"),
+                channel_id=config.welcome_channel_id,
+                message=config.welcome_message,
+            )
+            await interaction.response.edit_message(
+                content=view.content(),
                 view=view,
             )
             return
@@ -1710,6 +2031,452 @@ class SetupDashboardView(discord.ui.View):
             )
             self.stop()
             return
+
+
+class EventMentionModeSelect(discord.ui.Select):
+    def __init__(self, manager: EventNotificationManagerView) -> None:
+        self.manager = manager
+        options = [
+            discord.SelectOption(
+                label="No notification",
+                value="none",
+                description="Post cards without pinging anyone",
+                default=manager.mode == "none",
+            ),
+            discord.SelectOption(
+                label="@everyone",
+                value="everyone",
+                description="Ping everyone for new automatic event cards",
+                default=manager.mode == "everyone",
+            ),
+            discord.SelectOption(
+                label="Selected roles",
+                value="roles",
+                description="Ping one or more chosen Discord roles",
+                default=manager.mode == "roles",
+            ),
+        ]
+        super().__init__(
+            placeholder="Choose notification behaviour",
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        self.manager.mode = self.values[0]
+        await self.manager.save()
+        self.manager.rebuild()
+        await interaction.response.edit_message(
+            content=self.manager.content(notice="Notification setting updated."),
+            view=self.manager,
+        )
+
+
+class EventMentionRoleSelect(discord.ui.RoleSelect):
+    def __init__(self, manager: EventNotificationManagerView) -> None:
+        self.manager = manager
+        super().__init__(
+            placeholder="Choose roles to ping for new event cards",
+            min_values=1,
+            max_values=10,
+            row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        self.manager.role_ids = {
+            str(role.id)
+            for role in self.values
+            if not role.is_default()
+        }
+        self.manager.mode = "roles"
+        await self.manager.save()
+        self.manager.rebuild()
+        await interaction.response.edit_message(
+            content=self.manager.content(notice="Notification roles updated."),
+            view=self.manager,
+        )
+
+
+class EventNotificationBackButton(discord.ui.Button):
+    def __init__(self, manager: EventNotificationManagerView) -> None:
+        self.manager = manager
+        super().__init__(label="Back", style=discord.ButtonStyle.secondary, row=2)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = SetupDashboardView(
+            invoker_id=self.manager.invoker_id,
+            guild_id=self.manager.guild_id,
+        )
+        await interaction.response.edit_message(
+            content=await _setup_dashboard_content(self.manager.guild_id),
+            view=view,
+        )
+
+
+class EventNotificationManagerView(discord.ui.View):
+    def __init__(
+        self,
+        *,
+        invoker_id: int,
+        guild_id: str,
+        mode: str,
+        role_ids: set[str],
+    ) -> None:
+        super().__init__(timeout=600)
+        self.invoker_id = invoker_id
+        self.guild_id = guild_id
+        self.mode = mode if mode in {"none", "everyone", "roles"} else "none"
+        self.role_ids = set(role_ids)
+        self.rebuild()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.invoker_id:
+            return True
+        await interaction.response.send_message(
+            "Only the administrator who opened this setup can use these controls.",
+            ephemeral=True,
+        )
+        return False
+
+    async def save(self) -> None:
+        async with SessionFactory() as session:
+            config = await ensure_guild_config(session, self.guild_id)
+            config.event_mention_mode = self.mode
+            config.event_mention_role_ids = sorted(self.role_ids)
+            await session.commit()
+
+    def content(self, notice: str | None = None) -> str:
+        mode_label = {
+            "none": "No notification",
+            "everyone": "@everyone",
+            "roles": "Selected roles",
+        }[self.mode]
+        lines = [
+            "## 🔔 New Event Notifications",
+            f"**Mode:** {mode_label}",
+        ]
+        if self.mode == "roles":
+            selected = (
+                " ".join(f"<@&{role_id}>" for role_id in sorted(self.role_ids))
+                if self.role_ids
+                else "No roles selected yet"
+            )
+            lines.append(f"**Roles:** {selected}")
+        lines.extend(
+            [
+                "",
+                "Notifications are added only to genuinely new automatic event cards.",
+                "-# Test posts, backfills, card updates and lifecycle notices never ping.",
+                (
+                    "-# @everyone and non-mentionable roles require the bot to have "
+                    "the relevant Discord mention permission in the announcement channel."
+                ),
+            ]
+        )
+        if notice:
+            lines.extend(["", f"**{notice}**"])
+        return "\n".join(lines)
+
+    def rebuild(self) -> None:
+        self.clear_items()
+        self.add_item(EventMentionModeSelect(self))
+        if self.mode == "roles":
+            self.add_item(EventMentionRoleSelect(self))
+        self.add_item(EventNotificationBackButton(self))
+
+
+async def _validate_welcome_channel(
+    guild: discord.Guild,
+    channel_id: int,
+    *,
+    image_mode: bool,
+) -> tuple[discord.TextChannel | None, str | None]:
+    resolved = guild.get_channel(channel_id)
+    if resolved is None:
+        try:
+            resolved = await bot.fetch_channel(channel_id)
+        except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+            return None, "I could not access that welcome channel."
+
+    if not isinstance(resolved, discord.TextChannel):
+        return None, "Please choose a normal text channel for welcomes."
+
+    bot_member = guild.me
+    if bot_member is None:
+        return None, "I could not resolve my server permissions."
+
+    permissions = resolved.permissions_for(bot_member)
+    missing: list[str] = []
+    if not permissions.view_channel:
+        missing.append("View Channel")
+    if not permissions.send_messages:
+        missing.append("Send Messages")
+    if image_mode and not permissions.attach_files:
+        missing.append("Attach Files")
+
+    if missing:
+        return (
+            None,
+            f"I need these permissions in {resolved.mention}: **{', '.join(missing)}**.",
+        )
+    return resolved, None
+
+
+class WelcomeModeSelect(discord.ui.Select):
+    def __init__(self, manager: WelcomeManagerView) -> None:
+        self.manager = manager
+        options = [
+            discord.SelectOption(
+                label="Off",
+                value="off",
+                description="Do not welcome new members",
+                default=manager.mode == "off",
+            ),
+            discord.SelectOption(
+                label="Text welcome",
+                value="text",
+                description="Send the configured welcome message",
+                default=manager.mode == "text",
+            ),
+            discord.SelectOption(
+                label="Image banner",
+                value="image",
+                description="Send a generated avatar/server welcome banner",
+                default=manager.mode == "image",
+            ),
+        ]
+        super().__init__(
+            placeholder="Choose welcome style",
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        self.manager.mode = self.values[0]
+        await self.manager.save()
+        self.manager.rebuild()
+        notice = "Welcome setting updated."
+        if self.manager.mode != "off" and not settings.enable_member_welcomes:
+            notice = (
+                "Saved. Live joins still need the Server Members Intent and "
+                "POKEVENT_ENABLE_MEMBER_WELCOMES=true."
+            )
+        await interaction.response.edit_message(
+            content=self.manager.content(notice=notice),
+            view=self.manager,
+        )
+
+
+class WelcomeChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self, manager: WelcomeManagerView) -> None:
+        self.manager = manager
+        super().__init__(
+            placeholder="Choose the welcome channel",
+            channel_types=[discord.ChannelType.text],
+            min_values=1,
+            max_values=1,
+            row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            return
+
+        channel, error = await _validate_welcome_channel(
+            interaction.guild,
+            self.values[0].id,
+            image_mode=self.manager.mode == "image",
+        )
+        if channel is None:
+            await interaction.response.send_message(
+                error or "Invalid welcome channel.",
+                ephemeral=True,
+            )
+            return
+
+        self.manager.channel_id = str(channel.id)
+        await self.manager.save()
+        self.manager.rebuild()
+        await interaction.response.edit_message(
+            content=self.manager.content(
+                notice=f"Welcome channel set to {channel.mention}."
+            ),
+            view=self.manager,
+        )
+
+
+class WelcomeButton(discord.ui.Button):
+    def __init__(
+        self,
+        manager: WelcomeManagerView,
+        action: str,
+        label: str,
+        style: discord.ButtonStyle = discord.ButtonStyle.secondary,
+    ) -> None:
+        self.manager = manager
+        self.action = action
+        super().__init__(label=label, style=style, row=2)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self.manager.handle_action(interaction, self.action)
+
+
+class WelcomeMessageModal(discord.ui.Modal, title="Customise welcome message"):
+    message_input = discord.ui.TextInput(
+        label="Welcome message",
+        style=discord.TextStyle.paragraph,
+        placeholder="Welcome {member} to {server}! 👋",
+        required=False,
+        max_length=1000,
+    )
+
+    def __init__(self, manager: WelcomeManagerView) -> None:
+        super().__init__()
+        self.manager = manager
+        if manager.message:
+            self.message_input.default = manager.message
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        self.manager.message = self.message_input.value.strip() or None
+        await self.manager.save()
+        self.manager.rebuild()
+        await interaction.response.edit_message(
+            content=self.manager.content(notice="Welcome message updated."),
+            view=self.manager,
+        )
+
+
+class WelcomeManagerView(discord.ui.View):
+    def __init__(
+        self,
+        *,
+        invoker_id: int,
+        guild_id: str,
+        mode: str,
+        channel_id: str | None,
+        message: str | None,
+    ) -> None:
+        super().__init__(timeout=600)
+        self.invoker_id = invoker_id
+        self.guild_id = guild_id
+        self.mode = mode if mode in {"off", "text", "image"} else "off"
+        self.channel_id = channel_id
+        self.message = message
+        self.rebuild()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.invoker_id:
+            return True
+        await interaction.response.send_message(
+            "Only the administrator who opened this setup can use these controls.",
+            ephemeral=True,
+        )
+        return False
+
+    async def save(self) -> None:
+        async with SessionFactory() as session:
+            config = await ensure_guild_config(session, self.guild_id)
+            config.welcome_mode = self.mode
+            config.welcome_channel_id = self.channel_id
+            config.welcome_message = self.message
+            await session.commit()
+
+    def content(self, notice: str | None = None) -> str:
+        mode_label = {
+            "off": "Off",
+            "text": "Text",
+            "image": "Image banner",
+        }[self.mode]
+        channel = f"<#{self.channel_id}>" if self.channel_id else "Not configured"
+        message = self.message or DEFAULT_WELCOME_MESSAGE
+        lines = [
+            "## 👋 Member Welcomes",
+            f"**Mode:** {mode_label}",
+            f"**Channel:** {channel}",
+            f"**Message:** {message}",
+            "",
+            "Available message tokens: {member}, {display_name}, {server}.",
+        ]
+        if self.mode == "image":
+            lines.append(
+                "-# Image banners use the member avatar and server icon when available."
+            )
+        if not settings.enable_member_welcomes:
+            lines.append(
+                (
+                    "-# Live welcomes are globally disabled until the Server Members "
+                    "Intent and POKEVENT_ENABLE_MEMBER_WELCOMES=true are enabled."
+                )
+            )
+        if notice:
+            lines.extend(["", f"**{notice}**"])
+        return "\n".join(lines)
+
+    def rebuild(self) -> None:
+        self.clear_items()
+        self.add_item(WelcomeModeSelect(self))
+        if self.mode != "off":
+            self.add_item(WelcomeChannelSelect(self))
+            self.add_item(WelcomeButton(self, "message", "Custom Message"))
+            self.add_item(
+                WelcomeButton(
+                    self,
+                    "test",
+                    "Test Welcome",
+                    discord.ButtonStyle.primary,
+                )
+            )
+        self.add_item(WelcomeButton(self, "back", "Back"))
+
+    async def handle_action(
+        self,
+        interaction: discord.Interaction,
+        action: str,
+    ) -> None:
+        if action == "message":
+            await interaction.response.send_modal(WelcomeMessageModal(self))
+            return
+
+        if action == "test":
+            if interaction.guild is None or not isinstance(
+                interaction.user,
+                discord.Member,
+            ):
+                await interaction.response.send_message(
+                    "Welcome previews must be run inside a server.",
+                    ephemeral=True,
+                )
+                return
+
+            await interaction.response.defer()
+            sent = await _send_member_welcome(interaction.user, preview=True)
+            notice = (
+                "Test welcome sent."
+                if sent
+                else (
+                    "I could not send the test welcome. "
+                    "Check the mode, channel and permissions."
+                )
+            )
+            await interaction.edit_original_response(
+                content=self.content(notice=notice),
+                view=self,
+            )
+            return
+
+        if action == "back":
+            view = SetupDashboardView(
+                invoker_id=self.invoker_id,
+                guild_id=self.guild_id,
+            )
+            await interaction.response.edit_message(
+                content=await _setup_dashboard_content(self.guild_id),
+                view=view,
+            )
 
 
 class EventTypeSelect(discord.ui.Select):

@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     event_source: str = "pokedata"
     sync_interval_minutes: int = 180
     sync_guild_commands: bool = True
+    enable_member_welcomes: bool = False
 
     create_event_threads: bool = True
     event_default_duration_hours: int = 8

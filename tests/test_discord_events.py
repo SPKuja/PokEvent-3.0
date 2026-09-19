@@ -1,7 +1,11 @@
 from datetime import UTC, datetime
+from types import SimpleNamespace
+
+from PIL import Image
 
 from pokevent.discord_bot import (
     EVENTS_PAGE_SIZE,
+    _event_announcement_mentions,
     _event_cleanup_at,
     _event_embed,
     _event_link_view,
@@ -9,8 +13,10 @@ from pokevent.discord_bot import (
     _event_snapshot,
     _event_update_notice,
     _official_event_url,
+    _render_welcome_banner,
     _summary_embed,
     _thread_name,
+    _welcome_message,
     bot,
     event_page_content,
 )
@@ -259,3 +265,64 @@ def test_event_update_notice_handles_legacy_publication_without_snapshot() -> No
 
     assert "### ❌ Event cancelled" in notice
     assert "announcement card has been updated" in notice
+
+
+
+def test_event_notifications_default_to_no_ping() -> None:
+    config = SimpleNamespace(
+        event_mention_mode=None,
+        event_mention_role_ids=None,
+    )
+    channel = SimpleNamespace(guild=SimpleNamespace(me=None))
+
+    content, allowed = _event_announcement_mentions(config, channel)
+
+    assert content is None
+    assert allowed.everyone is False
+    assert allowed.roles is False
+    assert allowed.users is False
+
+
+def test_event_notifications_can_ping_everyone_when_permitted() -> None:
+    config = SimpleNamespace(
+        event_mention_mode="everyone",
+        event_mention_role_ids=None,
+    )
+    guild = SimpleNamespace(me=object())
+    channel = SimpleNamespace(
+        guild=guild,
+        permissions_for=lambda _member: SimpleNamespace(mention_everyone=True),
+    )
+
+    content, allowed = _event_announcement_mentions(config, channel)
+
+    assert content == "@everyone"
+    assert allowed.everyone is True
+
+
+def test_welcome_message_replaces_supported_tokens() -> None:
+    member = SimpleNamespace(
+        mention="<@123>",
+        display_name="Example Trainer",
+        guild=SimpleNamespace(name="Example Pokémon Server"),
+    )
+
+    message = _welcome_message(
+        member,
+        "Hello {member}! Welcome to {server}, {display_name}.",
+    )
+
+    assert message == (
+        "Hello <@123>! Welcome to Example Pokémon Server, Example Trainer."
+    )
+
+
+def test_generated_welcome_banner_is_png() -> None:
+    buffer = _render_welcome_banner(
+        member_name="Example Trainer",
+        server_name="Example Pokémon Server",
+    )
+
+    with Image.open(buffer) as image:
+        assert image.format == "PNG"
+        assert image.size == (1200, 400)

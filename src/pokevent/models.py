@@ -103,6 +103,11 @@ class GuildConfig(Base):
     default_channel_id: Mapped[str | None] = mapped_column(String(32))
     all_channel_id: Mapped[str | None] = mapped_column(String(32))
     card_event_types: Mapped[list[str] | None] = mapped_column(JSON)
+    event_mention_mode: Mapped[str | None] = mapped_column(String(16))
+    event_mention_role_ids: Mapped[list[str] | None] = mapped_column(JSON)
+    welcome_mode: Mapped[str | None] = mapped_column(String(16))
+    welcome_channel_id: Mapped[str | None] = mapped_column(String(32))
+    welcome_message: Mapped[str | None] = mapped_column(Text)
     leagues_seeded: Mapped[bool] = mapped_column(Boolean, default=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
