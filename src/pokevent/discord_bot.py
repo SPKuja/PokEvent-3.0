@@ -12,8 +12,8 @@ from urllib.parse import urlparse
 
 import discord
 from discord import app_commands
-from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 from discord.ext import commands, tasks
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 from sqlalchemy import or_, select
 
 from . import __version__
@@ -2407,10 +2407,8 @@ class WelcomeManagerView(discord.ui.View):
             )
         if not settings.enable_member_welcomes:
             lines.append(
-                (
-                    "-# Live welcomes are globally disabled until the Server Members "
-                    "Intent and POKEVENT_ENABLE_MEMBER_WELCOMES=true are enabled."
-                )
+                "-# Live welcomes are globally disabled until the Server Members "
+                "Intent and POKEVENT_ENABLE_MEMBER_WELCOMES=true are enabled."
             )
         if notice:
             lines.extend(["", f"**{notice}**"])
