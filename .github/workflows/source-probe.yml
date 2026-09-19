@@ -1,0 +1,55 @@
+name: Source Smoke Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      league:
+        description: Play! Pokémon League ID
+        required: true
+        default: "2012924"
+      date:
+        description: Event date (YYYY-MM-DD)
+        required: true
+        default: "2026-09-20"
+      latitude:
+        description: Discovery centre latitude
+        required: true
+        default: "51.5615"
+      longitude:
+        description: Discovery centre longitude
+        required: true
+        default: "-1.7855"
+      radius:
+        description: Discovery radius in miles
+        required: true
+        default: "50"
+
+permissions:
+  contents: read
+
+jobs:
+  event-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: python -m pip install -e .
+
+      - name: Probe event source
+        run: |
+          python scripts/probe_event.py \
+            --league "${{ inputs.league }}" \
+            --date "${{ inputs.date }}" \
+            --lat "${{ inputs.latitude }}" \
+            --lon "${{ inputs.longitude }}" \
+            --radius "${{ inputs.radius }}"
