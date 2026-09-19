@@ -595,11 +595,7 @@ async def _welcome_banner_file(member: discord.Member) -> discord.File:
     return discord.File(buffer, filename="pokevent-welcome.png")
 
 
-async def _send_member_welcome(
-    member: discord.Member,
-    *,
-    preview: bool = False,
-) -> bool:
+async def _send_member_welcome(member: discord.Member) -> bool:
     async with SessionFactory() as session:
         config = await ensure_guild_config(session, str(member.guild.id))
         mode = (config.welcome_mode or "off").casefold()
@@ -624,8 +620,6 @@ async def _send_member_welcome(
         return False
 
     content = _welcome_message(member, template)
-    if preview:
-        content = f"-# 🧪 Test welcome preview\n{content}"
 
     allowed_mentions = discord.AllowedMentions(
         everyone=False,
@@ -2336,19 +2330,26 @@ class WelcomeButton(discord.ui.Button):
 
 
 class WelcomeMessageModal(discord.ui.Modal, title="Customise welcome message"):
-    message_input = discord.ui.TextInput(
-        label="Welcome message",
-        style=discord.TextStyle.paragraph,
-        placeholder="Welcome {member} to {server}! 👋",
-        required=False,
-        max_length=1000,
-    )
-
     def __init__(self, manager: WelcomeManagerView) -> None:
         super().__init__()
         self.manager = manager
-        if manager.message:
-            self.message_input.default = manager.message
+        self.message_input = discord.ui.TextInput(
+            style=discord.TextStyle.paragraph,
+            placeholder="Welcome {member} to {server}! 👋",
+            default=manager.message,
+            required=False,
+            max_length=1000,
+        )
+        self.add_item(
+            discord.ui.Label(
+                text="Welcome message",
+                description=(
+                    "{member} = mention · {display_name} = name · "
+                    "{server} = server name"
+                ),
+                component=self.message_input,
+            )
+        )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         self.manager.message = self.message_input.value.strip() or None
@@ -2467,20 +2468,23 @@ class WelcomeManagerView(discord.ui.View):
                 )
                 return
 
-            await interaction.response.defer()
-            sent = await _send_member_welcome(interaction.user, preview=True)
-            notice = (
-                "Test welcome sent."
-                if sent
-                else (
-                    "I could not send the test welcome. "
-                    "Check the mode, channel and permissions."
+            preview_content = (
+                "-# 🧪 Test welcome preview\n"
+                f"{_welcome_message(interaction.user, self.message)}"
+            )
+            if self.mode == "image":
+                await interaction.response.send_message(
+                    content=preview_content,
+                    file=await _welcome_banner_file(interaction.user),
+                    allowed_mentions=discord.AllowedMentions.none(),
+                    ephemeral=True,
                 )
-            )
-            await interaction.edit_original_response(
-                content=self.content(notice=notice),
-                view=self,
-            )
+            else:
+                await interaction.response.send_message(
+                    content=preview_content,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                    ephemeral=True,
+                )
             return
 
         if action == "back":
@@ -3366,22 +3370,21 @@ class PostToolsView(discord.ui.View):
 
         if action == "test":
             try:
-                channel, event, league_name = await _preview_event_target(
+                _channel, event, league_name = await _preview_event_target(
                     self.guild_id,
                     self.selected_target,
                 )
-                await channel.send(
-                    embed=_event_embed(event, league_name, preview=True),
-                    view=_event_link_view(event),
-                )
             except ValueError as exc:
-                self.notice = str(exc)
-            else:
-                self.notice = f"Test card sent to {channel.mention}."
-            self.rebuild()
-            await interaction.response.edit_message(
-                content=self.content(),
-                view=self,
+                await interaction.response.send_message(
+                    str(exc),
+                    ephemeral=True,
+                )
+                return
+
+            await interaction.response.send_message(
+                embed=_event_embed(event, league_name, preview=True),
+                view=_event_link_view(event),
+                ephemeral=True,
             )
             return
 
@@ -4217,12 +4220,9 @@ async def eventchannel_test(
             )
             return
 
-        await channel.send(
+        await interaction.response.send_message(
             embed=_event_embed(event, league_name, preview=True),
             view=_event_link_view(event),
-        )
-        await interaction.response.send_message(
-            f"Sent a test event card to {channel.mention}.",
             ephemeral=True,
         )
     except ValueError as exc:
