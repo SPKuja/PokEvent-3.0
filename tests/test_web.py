@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
 from pokevent import web
+from pokevent.config import DEFAULT_LEAGUES, DEFAULT_LEAGUE_LOGOS
 from pokevent.models import Event
 from pokevent.public_site import public_index_html
 
@@ -61,3 +62,22 @@ def test_public_logo_rejects_non_http_url(monkeypatch) -> None:
     )
 
     assert web._public_logo_url("2012924") is None
+
+
+
+def test_default_leagues_have_matching_public_logos() -> None:
+    assert DEFAULT_LEAGUES == {
+        "2012924": "Pokémon League Swindon",
+        "5683200": "Bath TCG",
+        "6234115": "Firestorm Games Swindon",
+        "6244670": "Crazy Collectables",
+        "6238080": "Atomic Cards",
+    }
+    assert set(DEFAULT_LEAGUE_LOGOS) == set(DEFAULT_LEAGUES)
+    assert DEFAULT_LEAGUE_LOGOS["2012924"].endswith(
+        "/pokemon_league_swindon.png"
+    )
+    assert DEFAULT_LEAGUE_LOGOS["5683200"].endswith("/bath_tcg.png")
+    assert DEFAULT_LEAGUE_LOGOS["6234115"].endswith("/firestorm.png")
+    assert DEFAULT_LEAGUE_LOGOS["6244670"].endswith("/crazy_collectables.jpg")
+    assert DEFAULT_LEAGUE_LOGOS["6238080"].endswith("/atomic_cards.png")
