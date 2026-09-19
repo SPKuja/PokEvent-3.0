@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import math
+import random
 import re
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
@@ -389,7 +390,20 @@ def _event_link_view(event: Event) -> discord.ui.View | None:
     return view
 
 
-DEFAULT_WELCOME_MESSAGE = "Welcome {member} to **{server}**! 👋"
+POKEMON_WELCOME_MESSAGES = (
+    "A wild {member} appeared! Welcome to **{server}**! ✨",
+    "Professor Oak says hello, {member}! Welcome to **{server}**! 🌿",
+    "{member} joined the party! Your Pokémon adventure in **{server}** starts now! 🎒",
+    "Welcome, {member}! May your catches be shiny and your top-decks be perfect. ✨",
+    "{member} has entered the tall grass! Welcome to **{server}**! 🌱",
+    "A new Trainer approaches! Welcome to **{server}**, {member}! ⚡",
+    "{member}, I choose you! Welcome to **{server}**! 🔴",
+    "The Pokédex has been updated: {member} is now part of **{server}**! 📱",
+    "Welcome to **{server}**, {member}! Your next great Pokémon adventure starts here. 🗺️",
+    "{member} used Join Server — it's super effective! Welcome to **{server}**! 💥",
+    "Another Trainer has arrived! Give {member} a warm welcome to **{server}**! 👋",
+    "Welcome, {member}! Grab your deck, charge your Poké Balls, and make yourself at home in **{server}**! 🎴",
+)
 
 
 def _event_announcement_mentions(
@@ -446,7 +460,11 @@ def _event_announcement_mentions(
 
 
 def _welcome_message(member: discord.Member, template: str | None) -> str:
-    message = (template or DEFAULT_WELCOME_MESSAGE).strip() or DEFAULT_WELCOME_MESSAGE
+    message = (
+        template.strip()
+        if template and template.strip()
+        else random.choice(POKEMON_WELCOME_MESSAGES)
+    )
     return (
         message.replace("{member}", member.mention)
         .replace("{display_name}", member.display_name)
@@ -2392,12 +2410,12 @@ class WelcomeManagerView(discord.ui.View):
             "image": "Image banner",
         }[self.mode]
         channel = f"<#{self.channel_id}>" if self.channel_id else "Not configured"
-        message = self.message or DEFAULT_WELCOME_MESSAGE
+        message_source = "Custom message" if self.message else "Random Pokémon messages"
         lines = [
             "## 👋 Member Welcomes",
             f"**Mode:** {mode_label}",
             f"**Channel:** {channel}",
-            f"**Message:** {message}",
+            f"**Message style:** {message_source}",
             "",
             "Available message tokens: {member}, {display_name}, {server}.",
         ]
@@ -2419,7 +2437,9 @@ class WelcomeManagerView(discord.ui.View):
         self.add_item(WelcomeModeSelect(self))
         if self.mode != "off":
             self.add_item(WelcomeChannelSelect(self))
-            self.add_item(WelcomeButton(self, "message", "Custom Message"))
+            self.add_item(WelcomeButton(self, "message", "Set Custom Message"))
+            if self.message:
+                self.add_item(WelcomeButton(self, "random", "Use Random Messages"))
             self.add_item(
                 WelcomeButton(
                     self,
@@ -2437,6 +2457,16 @@ class WelcomeManagerView(discord.ui.View):
     ) -> None:
         if action == "message":
             await interaction.response.send_modal(WelcomeMessageModal(self))
+            return
+
+        if action == "random":
+            self.message = None
+            await self.save()
+            self.rebuild()
+            await interaction.response.edit_message(
+                content=self.content(notice="Random Pokémon welcomes enabled."),
+                view=self,
+            )
             return
 
         if action == "test":

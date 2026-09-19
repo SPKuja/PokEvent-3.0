@@ -5,6 +5,7 @@ from PIL import Image
 
 from pokevent.discord_bot import (
     EVENTS_PAGE_SIZE,
+    POKEMON_WELCOME_MESSAGES,
     _event_announcement_mentions,
     _event_cleanup_at,
     _event_embed,
@@ -326,3 +327,30 @@ def test_generated_welcome_banner_is_png() -> None:
     with Image.open(buffer) as image:
         assert image.format == "PNG"
         assert image.size == (1200, 400)
+
+
+
+def test_random_pokemon_welcome_is_used_without_custom_message(monkeypatch) -> None:
+    from pokevent import discord_bot
+
+    member = SimpleNamespace(
+        mention="<@123>",
+        display_name="Example Trainer",
+        guild=SimpleNamespace(name="Example Pokémon Server"),
+    )
+    monkeypatch.setattr(
+        discord_bot.random,
+        "choice",
+        lambda messages: messages[0],
+    )
+
+    message = _welcome_message(member, None)
+
+    assert message == (
+        "A wild <@123> appeared! Welcome to **Example Pokémon Server**! ✨"
+    )
+
+
+def test_pokemon_welcome_pool_has_variety() -> None:
+    assert len(POKEMON_WELCOME_MESSAGES) >= 10
+    assert len(set(POKEMON_WELCOME_MESSAGES)) == len(POKEMON_WELCOME_MESSAGES)
