@@ -1716,9 +1716,6 @@ async def _setup_dashboard_content(
         "text": "Text",
         "image": "Image banner",
     }.get(welcome_mode, "Off")
-    if welcome_mode != "off" and not settings.enable_member_welcomes:
-        welcome_label += " · gateway intent disabled"
-
     league_names = ", ".join(league.name for league in leagues[:6]) or "None"
     if len(leagues) > 6:
         league_names += f" +{len(leagues) - 6} more"
@@ -2278,11 +2275,6 @@ class WelcomeModeSelect(discord.ui.Select):
         await self.manager.save()
         self.manager.rebuild()
         notice = "Welcome setting updated."
-        if self.manager.mode != "off" and not settings.enable_member_welcomes:
-            notice = (
-                "Saved. Live joins still need the Server Members Intent and "
-                "POKEVENT_ENABLE_MEMBER_WELCOMES=true."
-            )
         await interaction.response.edit_message(
             content=self.manager.content(notice=notice),
             view=self.manager,
@@ -2422,11 +2414,6 @@ class WelcomeManagerView(discord.ui.View):
         if self.mode == "image":
             lines.append(
                 "-# Image banners use the member avatar and server icon when available."
-            )
-        if not settings.enable_member_welcomes:
-            lines.append(
-                "-# Live welcomes are globally disabled until the Server Members "
-                "Intent and POKEVENT_ENABLE_MEMBER_WELCOMES=true are enabled."
             )
         if notice:
             lines.extend(["", f"**{notice}**"])
