@@ -1,8 +1,8 @@
 from datetime import UTC, datetime
 
+from pokevent import web
 from pokevent.models import Event
 from pokevent.public_site import public_index_html
-from pokevent import web
 
 
 def _event() -> Event:
