@@ -3,7 +3,6 @@ from functools import lru_cache
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 DEFAULT_LEAGUES = {
     "2012924": "Pokémon League Swindon",
     "5683200": "Bath TCG",

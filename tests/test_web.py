@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from pokevent import web
-from pokevent.config import DEFAULT_LEAGUES, DEFAULT_LEAGUE_LOGOS
+from pokevent.config import DEFAULT_LEAGUE_LOGOS, DEFAULT_LEAGUES
 from pokevent.models import Event
 from pokevent.public_site import public_index_html
 
