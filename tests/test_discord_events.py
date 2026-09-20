@@ -401,19 +401,4 @@ def test_admin_dashboard_has_manual_event_check() -> None:
     }
 
     assert "Check New Events" in labels
-    assert "Community Events" in labels
-
-
-def test_community_event_card_is_labelled_and_shows_description() -> None:
-    event = _event(0)
-    event.source = "community"
-    event.description = "Bring a legal GLC deck."
-    event.event_type = "Community Event"
-    event.game = "tcg"
-
-    embed = _event_embed(event, "Pokémon League Swindon")
-    rendered = embed.to_dict()
-
-    assert "### 📝 Details" in (embed.description or "")
-    assert "Bring a legal GLC deck." in (embed.description or "")
-    assert rendered["footer"]["text"] == "PokÈvent 3.0 · Community event"
+    assert "Community Events" not in labels
