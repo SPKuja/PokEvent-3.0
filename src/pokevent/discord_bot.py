@@ -3960,6 +3960,32 @@ async def events(
     )
 
 
+def _public_calendar_url() -> str | None:
+    base_url = _safe_http_url(settings.public_base_url)
+    if not base_url:
+        return None
+    return f"{base_url.rstrip('/')}/"
+
+
+@bot.tree.command(
+    name="calendar",
+    description="Open the public PokÈvent event calendar.",
+)
+async def calendar(interaction: discord.Interaction) -> None:
+    url = _public_calendar_url()
+    if url is None:
+        await interaction.response.send_message(
+            "The public PokÈvent calendar URL is not configured.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.send_message(
+        f"📅 **PokÈvent Calendar**\n<{url}>",
+        ephemeral=True,
+    )
+
+
 @events.autocomplete("league")
 async def events_league_autocomplete(
     interaction: discord.Interaction,

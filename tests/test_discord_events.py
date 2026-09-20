@@ -16,6 +16,7 @@ from pokevent.discord_bot import (
     _event_snapshot,
     _event_update_notice,
     _official_event_url,
+    _public_calendar_url,
     _render_welcome_banner,
     _summary_embed,
     _thread_name,
@@ -362,3 +363,28 @@ def test_pokemon_welcome_pool_has_variety() -> None:
 def test_channel_pickers_allow_discord_announcement_channels() -> None:
     assert discord.ChannelType.text in ANNOUNCEMENT_CHANNEL_TYPES
     assert discord.ChannelType.news in ANNOUNCEMENT_CHANNEL_TYPES
+
+
+
+def test_public_calendar_url_uses_configured_base_url(monkeypatch) -> None:
+    from pokevent import discord_bot
+
+    monkeypatch.setattr(
+        discord_bot.settings,
+        "public_base_url",
+        "https://events.example.com/pokevent/",
+    )
+
+    assert _public_calendar_url() == "https://events.example.com/pokevent/"
+
+
+def test_public_calendar_url_rejects_invalid_base_url(monkeypatch) -> None:
+    from pokevent import discord_bot
+
+    monkeypatch.setattr(
+        discord_bot.settings,
+        "public_base_url",
+        "not-a-url",
+    )
+
+    assert _public_calendar_url() is None
