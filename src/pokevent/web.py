@@ -170,6 +170,7 @@ async def upcoming_events(
     filters = [
         Event.starts_at >= now,
         Event.status.in_(statuses),
+        Event.public_visible.is_(True),
     ]
 
     if configured_only:
@@ -216,7 +217,7 @@ def _calendar_event(event: Event) -> CalendarEvent:
 async def event_calendar_file(event_id: str) -> Response:
     async with SessionFactory() as session:
         event = await session.get(Event, event_id)
-    if event is None:
+    if event is None or not event.public_visible:
         raise HTTPException(status_code=404, detail="Event not found")
 
     calendar = Calendar()
@@ -236,6 +237,7 @@ async def calendar_feed(configured_only: bool = True) -> Response:
     filters = [
         Event.starts_at >= now,
         Event.status == "active",
+        Event.public_visible.is_(True),
     ]
     if configured_only:
         league_ids = list(settings.leagues)
