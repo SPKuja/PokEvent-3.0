@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -219,4 +220,19 @@ class ChannelSummary(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+
+class BotRuntime(Base):
+    __tablename__ = "bot_runtime"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    bot_user_id: Mapped[str | None] = mapped_column(String(32))
+    bot_name: Mapped[str | None] = mapped_column(String(255))
+    guild_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
     )

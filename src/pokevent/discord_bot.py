@@ -38,7 +38,14 @@ from .guild_config import (
     set_default_league,
     set_event_channel,
 )
-from .models import ChannelSummary, Event, GuildLeague, PublishedMessage, Route
+from .models import (
+    BotRuntime,
+    ChannelSummary,
+    Event,
+    GuildLeague,
+    PublishedMessage,
+    Route,
+)
 
 settings = get_settings()
 log = logging.getLogger("pokevent.discord")
@@ -55,6 +62,7 @@ class PokEventBot(commands.Bot):
         super().__init__(command_prefix=commands.when_mentioned, intents=intents)
         self._synced_guild_ids: set[int] = set()
         self._global_commands_removed = False
+        self.started_at = datetime.now(UTC)
 
     async def setup_hook(self) -> None:
         if not settings.sync_guild_commands:
@@ -65,6 +73,8 @@ class PokEventBot(commands.Bot):
             cleanup_expired_event_posts.start()
         if not refresh_channel_summaries.is_running():
             refresh_channel_summaries.start()
+        if not bot_runtime_heartbeat.is_running():
+            bot_runtime_heartbeat.start()
 
     async def _sync_commands_to_guild(self, guild: discord.Guild) -> None:
         if not settings.sync_guild_commands or guild.id in self._synced_guild_ids:
@@ -108,11 +118,18 @@ class PokEventBot(commands.Bot):
         except discord.HTTPException:
             log.exception("failed to remove duplicate global commands")
 
+        await _update_bot_runtime()
+
     async def on_guild_join(self, guild: discord.Guild) -> None:
         try:
             await self._sync_commands_to_guild(guild)
         except discord.HTTPException:
             log.exception("failed to sync commands to new guild=%s", guild.id)
+        await _update_bot_runtime()
+
+    async def on_guild_remove(self, guild: discord.Guild) -> None:
+        self._synced_guild_ids.discard(guild.id)
+        await _update_bot_runtime()
 
     async def on_member_join(self, member: discord.Member) -> None:
         if not settings.enable_member_welcomes or member.bot:
@@ -835,6 +852,44 @@ async def _notify_event_thread(
 
 
 bot = PokEventBot()
+
+
+async def _update_bot_runtime() -> None:
+    if bot.user is None:
+        return
+
+    now = datetime.now(UTC)
+    async with SessionFactory() as session:
+        runtime = await session.get(BotRuntime, "discord")
+        if runtime is None:
+            runtime = BotRuntime(
+                id="discord",
+                bot_user_id=str(bot.user.id),
+                bot_name=str(bot.user),
+                guild_count=len(bot.guilds),
+                started_at=bot.started_at,
+                last_seen_at=now,
+            )
+            session.add(runtime)
+        else:
+            runtime.bot_user_id = str(bot.user.id)
+            runtime.bot_name = str(bot.user)
+            runtime.guild_count = len(bot.guilds)
+            runtime.started_at = bot.started_at
+            runtime.last_seen_at = now
+        await session.commit()
+
+
+@tasks.loop(minutes=1)
+async def bot_runtime_heartbeat() -> None:
+    await _update_bot_runtime()
+
+
+@bot_runtime_heartbeat.before_loop
+async def before_bot_runtime_heartbeat() -> None:
+    await bot.wait_until_ready()
+
+
 pokevent = app_commands.Group(name="pokevent", description="PokÈvent 3.0")
 league_group = app_commands.Group(
     name="league",

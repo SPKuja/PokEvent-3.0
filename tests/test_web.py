@@ -8,7 +8,8 @@ from pokevent.config import (
     DEFAULT_LEAGUES,
     Settings,
 )
-from pokevent.models import Event
+from pokevent.bot_info_site import bot_info_html
+from pokevent.models import BotRuntime, Event
 from pokevent.public_site import public_index_html
 
 
@@ -125,3 +126,59 @@ def test_brand_logo_can_be_overridden_from_environment(monkeypatch) -> None:
 
 def test_safe_public_url_rejects_non_http_brand_url() -> None:
     assert web._safe_public_url("javascript:alert(1)") is None
+
+
+
+def test_bot_info_page_has_live_stats_and_invite_control() -> None:
+    html = bot_info_html(
+        community_name="Pokémon League Swindon",
+        brand_logo_url=DEFAULT_BRAND_LOGO_URL,
+    )
+
+    assert "PokÈvent Discord Bot" in html
+    assert 'id="uptime"' in html
+    assert 'id="servers"' in html
+    assert 'id="inviteButton"' in html
+    assert 'href="/"' in html
+
+
+def test_bot_info_payload_reports_online_runtime() -> None:
+    runtime = BotRuntime(
+        id="discord",
+        bot_user_id="123456789",
+        bot_name="PokÈvent#0001",
+        guild_count=7,
+        started_at=datetime(2026, 9, 20, 8, 0, tzinfo=UTC),
+        last_seen_at=datetime(2026, 9, 20, 9, 59, 30, tzinfo=UTC),
+    )
+
+    payload = web._bot_info_payload(
+        runtime,
+        now=datetime(2026, 9, 20, 10, 0, tzinfo=UTC),
+    )
+
+    assert payload["online"] is True
+    assert payload["uptime_seconds"] == 7200
+    assert payload["server_count"] == 7
+    assert payload["bot_name"] == "PokÈvent#0001"
+    assert "client_id=123456789" in payload["invite_url"]
+    assert "applications.commands" in payload["invite_url"]
+
+
+def test_bot_info_payload_marks_stale_heartbeat_offline() -> None:
+    runtime = BotRuntime(
+        id="discord",
+        bot_user_id="123456789",
+        bot_name="PokÈvent#0001",
+        guild_count=7,
+        started_at=datetime(2026, 9, 20, 8, 0, tzinfo=UTC),
+        last_seen_at=datetime(2026, 9, 20, 9, 55, tzinfo=UTC),
+    )
+
+    payload = web._bot_info_payload(
+        runtime,
+        now=datetime(2026, 9, 20, 10, 0, tzinfo=UTC),
+    )
+
+    assert payload["online"] is False
+    assert payload["uptime_seconds"] == 6900

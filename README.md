@@ -120,3 +120,8 @@ Recommended variables:
 The web service joins the external `NeuralNet` Docker network for reverse-proxy
 access and exposes port 8080 by default. PostgreSQL remains on the stack's
 private default network.
+
+## Bot information
+
+- `GET /bot` shows live PokÈvent Discord bot information, uptime, server count and invite link.
+- `GET /api/bot` returns the same bot runtime information as JSON.

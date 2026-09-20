@@ -11,9 +11,10 @@ from icalendar import Event as CalendarEvent
 from sqlalchemy import select, text
 
 from . import __version__
+from .bot_info_site import bot_info_html
 from .config import get_settings
 from .db import SessionFactory
-from .models import Event, Organisation
+from .models import BotRuntime, Event, Organisation
 from .public_site import public_index_html
 
 settings = get_settings()
@@ -83,6 +84,76 @@ async def public_calendar() -> HTMLResponse:
             brand_logo_url=_safe_public_url(settings.brand_logo_url) or "",
         )
     )
+
+
+def _bot_info_payload(
+    runtime: BotRuntime | None,
+    *,
+    now: datetime | None = None,
+) -> dict:
+    current = now or datetime.now(UTC)
+    online = False
+    uptime_seconds: int | None = None
+    invite_url: str | None = None
+    bot_name: str | None = None
+    server_count: int | None = None
+    started_at: datetime | None = None
+    last_seen_at: datetime | None = None
+
+    if runtime is not None:
+        started_at = runtime.started_at
+        last_seen_at = runtime.last_seen_at
+        bot_name = runtime.bot_name
+        server_count = runtime.guild_count
+
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=UTC)
+        if last_seen_at.tzinfo is None:
+            last_seen_at = last_seen_at.replace(tzinfo=UTC)
+
+        online = (current - last_seen_at).total_seconds() <= 150
+        uptime_end = current if online else last_seen_at
+        uptime_seconds = max(
+            0,
+            int((uptime_end - started_at).total_seconds()),
+        )
+
+        if runtime.bot_user_id and runtime.bot_user_id.isdigit():
+            invite_url = (
+                "https://discord.com/oauth2/authorize"
+                f"?client_id={runtime.bot_user_id}"
+                "&permissions=8"
+                "&scope=bot%20applications.commands"
+            )
+
+    return {
+        "online": online,
+        "uptime_seconds": uptime_seconds,
+        "server_count": server_count,
+        "version": __version__,
+        "bot_name": bot_name,
+        "started_at": started_at,
+        "last_seen_at": last_seen_at,
+        "configured_league_count": len(settings.leagues),
+        "invite_url": invite_url,
+    }
+
+
+@app.get("/bot", response_class=HTMLResponse)
+async def bot_info_page() -> HTMLResponse:
+    return HTMLResponse(
+        bot_info_html(
+            community_name=settings.community_name,
+            brand_logo_url=_safe_public_url(settings.brand_logo_url) or "",
+        )
+    )
+
+
+@app.get("/api/bot")
+async def bot_info_api() -> dict:
+    async with SessionFactory() as session:
+        runtime = await session.get(BotRuntime, "discord")
+    return _bot_info_payload(runtime)
 
 
 @app.get("/api/events")

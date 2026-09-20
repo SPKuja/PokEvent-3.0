@@ -26,6 +26,9 @@ h1,h2,h3,p {{ margin-top:0 }}
 h1 {{ margin-bottom:2px; font-size:clamp(28px,4vw,40px); letter-spacing:-.04em }}
 .meta {{ color:var(--muted) }}
 .eyebrow {{ color:var(--accent); font-size:12px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; margin-bottom:3px }}
+.site-nav {{ display:flex; gap:8px; margin:0 0 20px }}
+.site-nav a {{ text-decoration:none; padding:9px 13px; border:1px solid var(--line); border-radius:10px; background:#fff; color:var(--accent-dark); font-weight:700 }}
+.site-nav a.active {{ background:var(--accent); color:#fff; border-color:var(--accent) }}
 .controls {{ display:grid; grid-template-columns:auto 1fr; gap:12px; background:rgba(255,253,251,.96); border:1px solid var(--line); border-radius:18px; padding:12px; margin-bottom:22px; box-shadow:0 8px 28px rgba(73,43,38,.07) }}
 .switcher {{ display:flex; background:#f2e9e5; padding:4px; border-radius:13px }}
 .switcher button,.ghost,.primary {{ border:0; border-radius:10px; padding:10px 14px; cursor:pointer }}
@@ -86,6 +89,7 @@ dialog::backdrop {{ background:rgba(54,32,30,.55) }}
 <body>
 <main class="shell">
 <header><img class="brand-logo" src="{brand_logo}" alt="PokÈvent 3.0"><div><div class="eyebrow">Play • Trade • Battle</div><h1>PokÈvent</h1></div></header>
+<nav class="site-nav" aria-label="PokÈvent"><a href="/" class="active">Events</a><a href="/bot">Bot Info</a></nav>
 <section class="controls">
   <div class="switcher"><button id="calendarMode" class="active">Calendar</button><button id="listMode">List</button></div>
   <div class="filters">
