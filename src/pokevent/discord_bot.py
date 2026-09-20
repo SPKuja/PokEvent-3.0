@@ -52,6 +52,10 @@ log = logging.getLogger("pokevent.discord")
 
 EVENTS_PAGE_SIZE = 10
 EVENTS_QUERY_LIMIT = 250
+ANNOUNCEMENT_CHANNEL_TYPES = [
+    discord.ChannelType.text,
+    discord.ChannelType.news,
+]
 
 
 class PokEventBot(commands.Bot):
@@ -1704,7 +1708,10 @@ async def _validate_announcement_channel(
             )
 
     if not isinstance(resolved, discord.TextChannel):
-        return None, "Please choose a normal text channel for PokÈvent announcements."
+        return (
+            None,
+            "Please choose a text or Announcement channel for PokÈvent announcements.",
+        )
 
     permissions = resolved.permissions_for(bot_member)
     required_permissions = {
@@ -2335,7 +2342,7 @@ class WelcomeChannelSelect(discord.ui.ChannelSelect):
         self.manager = manager
         super().__init__(
             placeholder="Choose the welcome channel",
-            channel_types=[discord.ChannelType.text],
+            channel_types=ANNOUNCEMENT_CHANNEL_TYPES,
             min_values=1,
             max_values=1,
             row=1,
@@ -3124,7 +3131,7 @@ class ChannelPicker(discord.ui.ChannelSelect):
         self.manager = manager
         super().__init__(
             placeholder="Choose a new announcement channel",
-            channel_types=[discord.ChannelType.text],
+            channel_types=ANNOUNCEMENT_CHANNEL_TYPES,
             min_values=1,
             max_values=1,
             row=1,
@@ -3504,7 +3511,7 @@ class SetupChannelSelect(discord.ui.ChannelSelect):
         )
         super().__init__(
             placeholder=placeholder,
-            channel_types=[discord.ChannelType.text],
+            channel_types=ANNOUNCEMENT_CHANNEL_TYPES,
             min_values=1,
             max_values=1,
         )

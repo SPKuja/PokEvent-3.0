@@ -1,9 +1,11 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import discord
 from PIL import Image
 
 from pokevent.discord_bot import (
+    ANNOUNCEMENT_CHANNEL_TYPES,
     EVENTS_PAGE_SIZE,
     POKEMON_WELCOME_MESSAGES,
     _event_announcement_mentions,
@@ -354,3 +356,9 @@ def test_random_pokemon_welcome_is_used_without_custom_message(monkeypatch) -> N
 def test_pokemon_welcome_pool_has_variety() -> None:
     assert len(POKEMON_WELCOME_MESSAGES) >= 10
     assert len(set(POKEMON_WELCOME_MESSAGES)) == len(POKEMON_WELCOME_MESSAGES)
+
+
+
+def test_channel_pickers_allow_discord_announcement_channels() -> None:
+    assert discord.ChannelType.text in ANNOUNCEMENT_CHANNEL_TYPES
+    assert discord.ChannelType.news in ANNOUNCEMENT_CHANNEL_TYPES
