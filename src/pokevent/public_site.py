@@ -11,58 +11,60 @@ def public_index_html(*, community_name: str, home_name: str) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#111318">
+<meta name="theme-color" content="#7f2528">
 <title>PokÈvent · {community}</title>
 <style>
-:root {{ color-scheme:dark; --bg:#0d0f13; --panel:#171a21; --panel2:#20242d; --text:#f4f5f7; --muted:#a7adba; --line:#2c313d; --accent:#ef5350; }}
+:root {{ color-scheme:light; --bg:#f5f1ed; --panel:#fffdfb; --panel2:#f6e9e7; --text:#2c2323; --muted:#756866; --line:#ddcfca; --accent:#8d292d; --accent-dark:#692025; --accent-soft:#f2dedd; --gold:#c5a568; }}
 * {{ box-sizing:border-box }}
-body {{ margin:0; background:radial-gradient(circle at 15% -10%,rgba(239,83,80,.14),transparent 34rem),var(--bg); color:var(--text); font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif }}
+body {{ margin:0; background:linear-gradient(180deg,#ffffff 0,#f8f4f1 210px,var(--bg) 520px); color:var(--text); font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif }}
 button,select {{ font:inherit }}
 a {{ color:inherit }}
 .shell {{ width:min(1180px,calc(100% - 28px)); margin:auto; padding:34px 0 70px }}
 header {{ display:flex; align-items:center; gap:14px; margin-bottom:28px }}
-.brandmark {{ width:48px; height:48px; border-radius:50%; display:grid; place-items:center; font-weight:900; font-size:21px; color:#fff; background:linear-gradient(180deg,var(--accent) 0 49%,#fff 49% 56%,#171a21 56%); border:2px solid #fff }}
+.brandmark {{ width:52px; height:52px; border-radius:50%; display:grid; place-items:center; font-weight:900; font-size:21px; color:#fff; background:var(--accent); border:4px solid #fff; box-shadow:0 3px 14px rgba(82,32,33,.18) }}
 h1,h2,h3,p {{ margin-top:0 }}
 h1 {{ margin-bottom:2px; font-size:clamp(28px,4vw,40px); letter-spacing:-.04em }}
 .subtitle,.meta {{ color:var(--muted) }}
+.eyebrow {{ color:var(--accent); font-size:12px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; margin-bottom:3px }}
 .subtitle {{ margin:0 }}
-.controls {{ display:grid; grid-template-columns:auto 1fr; gap:12px; background:rgba(23,26,33,.94); border:1px solid var(--line); border-radius:18px; padding:12px; margin-bottom:22px }}
-.switcher {{ display:flex; background:#111318; padding:4px; border-radius:13px }}
+.controls {{ display:grid; grid-template-columns:auto 1fr; gap:12px; background:rgba(255,253,251,.96); border:1px solid var(--line); border-radius:18px; padding:12px; margin-bottom:22px; box-shadow:0 8px 28px rgba(73,43,38,.07) }}
+.switcher {{ display:flex; background:#f2e9e5; padding:4px; border-radius:13px }}
 .switcher button,.ghost,.primary {{ border:0; border-radius:10px; padding:10px 14px; cursor:pointer }}
 .switcher button {{ color:var(--muted); background:transparent }}
-.switcher button.active {{ background:var(--panel2); color:var(--text) }}
+.switcher button.active {{ background:var(--accent); color:#fff }}
 .filters {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px }}
-select {{ width:100%; padding:10px 12px; border-radius:10px; border:1px solid var(--line); background:#111318; color:var(--text) }}
+select {{ width:100%; padding:10px 12px; border-radius:10px; border:1px solid var(--line); background:#fff; color:var(--text) }}
 .toolbar {{ display:flex; justify-content:space-between; align-items:center; gap:12px; margin:18px 0 }}
 .toolbar h2 {{ margin:0; font-size:20px }}
 .month-nav {{ display:flex; gap:7px }}
-.ghost {{ background:var(--panel); color:var(--text); border:1px solid var(--line); text-decoration:none; display:inline-block }}
+.ghost {{ background:#fff; color:var(--accent-dark); border:1px solid var(--line); text-decoration:none; display:inline-block }}
 .primary {{ background:var(--accent); color:#fff; text-decoration:none; display:inline-block }}
+.primary:hover {{ background:var(--accent-dark) }}
 .calendar {{ display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); border:1px solid var(--line); border-radius:18px; overflow:hidden; background:var(--panel) }}
 .weekday {{ padding:10px; color:var(--muted); font-size:12px; text-align:center; border-bottom:1px solid var(--line) }}
 .day {{ min-height:128px; padding:8px; border-right:1px solid var(--line); border-bottom:1px solid var(--line); background:var(--panel) }}
 .day.outside {{ opacity:.3 }}
 .day-number {{ color:var(--muted); font-size:12px; margin-bottom:7px }}
-.event-pill {{ display:block; width:100%; text-align:left; border:0; cursor:pointer; color:var(--text); background:var(--panel2); border-left:3px solid var(--accent); border-radius:8px; padding:7px 8px; margin-bottom:6px; font-size:12px }}
+.event-pill {{ display:block; width:100%; text-align:left; border:1px solid #ead7d4; cursor:pointer; color:var(--text); background:var(--accent-soft); border-left:4px solid var(--accent); border-radius:8px; padding:7px 8px; margin-bottom:6px; font-size:12px }}
 .event-pill.cancelled {{ opacity:.6; text-decoration:line-through }}
 .list {{ display:grid; gap:12px }}
 .event-card {{ display:grid; grid-template-columns:64px 1fr auto; gap:15px; align-items:center; background:var(--panel); border:1px solid var(--line); border-radius:18px; padding:15px; cursor:pointer }}
-.event-card:hover {{ border-color:#4c5362 }}
-.league-logo,.league-fallback {{ width:58px; height:58px; border-radius:15px; object-fit:cover; background:#111318; border:1px solid var(--line) }}
+.event-card:hover {{ border-color:#b98d88; box-shadow:0 8px 22px rgba(73,43,38,.07) }}
+.league-logo,.league-fallback {{ width:58px; height:58px; border-radius:15px; object-fit:contain; background:#fff; border:1px solid var(--line); padding:4px }}
 .league-fallback {{ display:grid; place-items:center; color:var(--accent); font-size:22px; font-weight:900 }}
 .tags {{ display:flex; flex-wrap:wrap; gap:6px; margin-top:7px }}
-.tag {{ font-size:11px; padding:4px 7px; border-radius:999px; background:#252a34 }}
+.tag {{ font-size:11px; padding:4px 7px; border-radius:999px; background:#f0e4df; color:var(--accent-dark) }}
 .date-block {{ text-align:right; min-width:92px }}
 .date-block strong {{ display:block; font-size:17px }}
 .empty {{ padding:45px 20px; text-align:center; color:var(--muted); border:1px dashed var(--line); border-radius:18px }}
 dialog {{ width:min(620px,calc(100% - 24px)); border:1px solid var(--line); border-radius:22px; color:var(--text); background:var(--panel); padding:0 }}
-dialog::backdrop {{ background:rgba(0,0,0,.7) }}
+dialog::backdrop {{ background:rgba(54,32,30,.55) }}
 .dialog-body {{ padding:22px }}
 .dialog-head {{ display:flex; justify-content:space-between; gap:14px }}
 .dialog-title {{ display:flex; gap:14px; align-items:center }}
 .close {{ border:0; background:transparent; color:var(--muted); font-size:26px; cursor:pointer }}
 .detail-grid {{ display:grid; grid-template-columns:1fr 1fr; gap:13px; margin:20px 0 }}
-.detail {{ background:#111318; border-radius:12px; padding:12px }}
+.detail {{ background:#f8f1ee; border:1px solid #eadfda; border-radius:12px; padding:12px }}
 .detail small {{ color:var(--muted); display:block; margin-bottom:3px }}
 .actions {{ display:flex; flex-wrap:wrap; gap:8px }}
 .cancelled-banner {{ padding:9px 12px; background:rgba(239,83,80,.15); border:1px solid rgba(239,83,80,.4); border-radius:10px; margin-bottom:14px }}
@@ -82,7 +84,7 @@ dialog::backdrop {{ background:rgba(0,0,0,.7) }}
 </head>
 <body>
 <main class="shell">
-<header><div class="brandmark">P</div><div><h1>PokÈvent</h1><p class="subtitle">Pokémon events around {home}</p></div></header>
+<header><div class="brandmark">P</div><div><div class="eyebrow">Play • Trade • Battle</div><h1>PokÈvent</h1><p class="subtitle">Upcoming events from our configured Play! Pokémon Leagues in and around {home}.</p></div></header>
 <section class="controls">
   <div class="switcher"><button id="calendarMode" class="active">Calendar</button><button id="listMode">List</button></div>
   <div class="filters">
@@ -157,7 +159,7 @@ function openEvent(id){{
   history.replaceState(null,"","#event="+encodeURIComponent(e.id));els.eventDialog.showModal();
 }}
 async function load(){{
-  var response=await fetch("/api/events?limit=500&include_cancelled=true");state.events=await response.json();populateFilters();applyFilters();
+  var response=await fetch("/api/events?limit=500&include_cancelled=true&configured_only=true");state.events=await response.json();populateFilters();applyFilters();
   var match=location.hash.match(/^#event=(.+)$/);if(match)openEvent(decodeURIComponent(match[1]));
 }}
 els.calendarMode.addEventListener("click",function(){{state.mode="calendar";render()}});

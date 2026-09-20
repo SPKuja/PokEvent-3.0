@@ -86,19 +86,27 @@ async def public_calendar() -> HTMLResponse:
 async def upcoming_events(
     limit: int = 100,
     include_cancelled: bool = False,
+    configured_only: bool = True,
 ) -> list[dict]:
     now = datetime.now(UTC)
     statuses = ["active", "cancelled"] if include_cancelled else ["active"]
+    filters = [
+        Event.starts_at >= now,
+        Event.status.in_(statuses),
+    ]
+
+    if configured_only:
+        league_ids = list(settings.leagues)
+        if not league_ids:
+            return []
+        filters.append(Event.upstream_organisation_id.in_(league_ids))
 
     async with SessionFactory() as session:
         rows = (
             await session.execute(
                 select(Event, Organisation.name)
                 .outerjoin(Organisation, Event.organisation_id == Organisation.id)
-                .where(
-                    Event.starts_at >= now,
-                    Event.status.in_(statuses),
-                )
+                .where(*filters)
                 .order_by(Event.starts_at)
                 .limit(min(max(limit, 1), 500))
             )
@@ -146,13 +154,23 @@ async def event_calendar_file(event_id: str) -> Response:
 
 
 @app.get("/calendar.ics")
-async def calendar_feed() -> Response:
+async def calendar_feed(configured_only: bool = True) -> Response:
     now = datetime.now(UTC)
+    filters = [
+        Event.starts_at >= now,
+        Event.status == "active",
+    ]
+    if configured_only:
+        league_ids = list(settings.leagues)
+        if not league_ids:
+            league_ids = ["__none__"]
+        filters.append(Event.upstream_organisation_id.in_(league_ids))
+
     async with SessionFactory() as session:
         rows = (
             await session.scalars(
                 select(Event)
-                .where(Event.starts_at >= now, Event.status == "active")
+                .where(*filters)
                 .order_by(Event.starts_at)
             )
         ).all()

@@ -1,7 +1,8 @@
+import inspect
 from datetime import UTC, datetime
 
 from pokevent import web
-from pokevent.config import DEFAULT_LEAGUE_LOGOS, DEFAULT_LEAGUES
+from pokevent.config import DEFAULT_LEAGUE_LOGOS, DEFAULT_LEAGUES, Settings
 from pokevent.models import Event
 from pokevent.public_site import public_index_html
 
@@ -29,7 +30,7 @@ def test_public_site_contains_calendar_and_list_controls() -> None:
     )
 
     assert "<h1>PokÈvent</h1>" in html
-    assert "Pokémon events around Swindon" in html
+    assert "configured Play! Pokémon Leagues in and around Swindon" in html
     assert 'id="calendarMode"' in html
     assert 'id="listMode"' in html
     assert 'id="leagueFilter"' in html
@@ -81,3 +82,23 @@ def test_default_leagues_have_matching_public_logos() -> None:
     assert DEFAULT_LEAGUE_LOGOS["6234115"].endswith("/firestorm.png")
     assert DEFAULT_LEAGUE_LOGOS["6244670"].endswith("/crazy_collectables.jpg")
     assert DEFAULT_LEAGUE_LOGOS["6238080"].endswith("/atomic_cards.png")
+
+
+
+def test_public_event_surfaces_default_to_configured_leagues_only() -> None:
+    event_parameters = inspect.signature(web.upcoming_events).parameters
+    calendar_parameters = inspect.signature(web.calendar_feed).parameters
+
+    assert event_parameters["configured_only"].default is True
+    assert calendar_parameters["configured_only"].default is True
+
+
+def test_portainer_league_environment_can_override_defaults(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "POKEVENT_LEAGUES",
+        '{"9999999":"Example League"}',
+    )
+
+    configured = Settings(_env_file=None)
+
+    assert configured.leagues == {"9999999": "Example League"}
