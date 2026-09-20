@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pokevent"
-version = "3.0.0a2"
+version = "3.0.0a3"
 description = "Community-first Play! Pokémon event discovery, routing and publishing."
 readme = "README.md"
 requires-python = ">=3.12"
