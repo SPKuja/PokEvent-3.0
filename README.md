@@ -102,27 +102,33 @@ See [docs/architecture.md](docs/architecture.md) and
 
 ## Portainer deployment
 
-For Portainer, use the dedicated `docker-compose.portainer.yml` file. It does
-not require a physical `.env` file; values are supplied through Portainer's
-stack environment variables.
+For Portainer, use the dedicated `docker-compose.portainer.yml` file. It pulls
+the tested `ghcr.io/spkuja/pokevent-3.0:latest` image instead of rebuilding the
+application from Git.
+
+The app services use `pull_policy: always`, so redeploying/updating the stack
+checks GitHub Container Registry for the newest green `main` image. Database
+migrations run before the web, bot and worker services start.
 
 Required variables:
 
 - `POSTGRES_PASSWORD` — strong database password;
 - `POKEVENT_DISCORD_TOKEN` — Discord bot token.
 
-Recommended variables:
+Recommended variable:
 
-- `POKEVENT_LEAGUES` — JSON map of the League IDs PokÈvent should treat as its
-  configured/default League network. This remains a Portainer environment
-  variable and can be changed without modifying the application code;
-- `POKEVENT_LEAGUE_LOGOS` — optional JSON map of League IDs to public logo URLs;
-- `POKEVENT_BRAND_LOGO_URL` — public URL for the PokÈvent logo used by the calendar header;
 - `POKEVENT_PUBLIC_BASE_URL` — public HTTPS URL once reverse proxying is set up.
+
+Most other PokÈvent settings already have application defaults and only need to
+be added to Portainer when overriding those defaults.
 
 The web service joins the external `NeuralNet` Docker network for reverse-proxy
 access and exposes port 8080 by default. PostgreSQL remains on the stack's
 private default network.
+
+The CI workflow publishes `:latest` only after the test job passes on `main`.
+Version tags beginning with `v` are also published as matching container tags,
+which allows a deployment to be pinned to a specific release if desired.
 
 ## Bot information
 
