@@ -40,6 +40,9 @@ Implemented:
 - local geographic discovery for other nearby Leagues;
 - content hashing and catalogue updates;
 - background sync worker;
+- Discord-managed community events for unsanctioned/local listings;
+- guild ownership boundaries for community-created events;
+- create/edit/cancel community-event controls inside `/pokevent setup`;
 - Discord bot bootstrap with `/events` and `/pokevent status`;
 - FastAPI health/event API;
 - public iCalendar feed;
@@ -135,3 +138,21 @@ private default network.
 
 
 The `/pokevent setup` admin dashboard includes **Check New Events**, which runs an immediate source sync, publishes any genuinely new routed events and refreshes the server's rolling summaries.
+
+
+## Community events
+
+Server administrators can create local events that are not present in Play! Pokémon
+from **/pokevent setup → Community Events**.
+
+Community events:
+
+- are owned by the Discord server that created them;
+- are associated with one of that server's configured Leagues for routing;
+- use the normal PokÈvent announcement cards, summaries, discussion threads and
+  lifecycle updates;
+- can be edited or cancelled without deleting their publication history;
+- are hidden from the public PokÈvent website and iCalendar feeds by default.
+
+This keeps local/community publishing useful without turning the public catalogue
+into an unrestricted user-submitted event directory.

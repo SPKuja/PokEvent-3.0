@@ -66,6 +66,10 @@ class Event(Base):
     game: Mapped[str | None] = mapped_column(String(32))
     event_type: Mapped[str | None] = mapped_column(String(128))
     status: Mapped[str] = mapped_column(String(32), default="active")
+    owner_guild_id: Mapped[str | None] = mapped_column(String(32), index=True)
+    created_by_user_id: Mapped[str | None] = mapped_column(String(32))
+    description: Mapped[str | None] = mapped_column(Text)
+    public_visible: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

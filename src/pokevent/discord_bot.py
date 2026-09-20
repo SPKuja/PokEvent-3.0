@@ -10,6 +10,7 @@ import random
 import re
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
@@ -18,6 +19,15 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 from sqlalchemy import or_, select
 
 from . import __version__
+from .community_events import (
+    COMMUNITY_SOURCE,
+    cancel_community_event,
+    create_community_event,
+    list_community_events,
+    parse_local_datetime,
+    update_community_event_core,
+    update_community_event_details,
+)
 from .config import get_settings
 from .db import SessionFactory
 from .event_policy import (
@@ -57,6 +67,21 @@ ANNOUNCEMENT_CHANNEL_TYPES = [
     discord.ChannelType.text,
     discord.ChannelType.news,
 ]
+
+
+def _guild_visible_event_clause(guild_id: str):
+    return or_(
+        Event.source != COMMUNITY_SOURCE,
+        Event.owner_guild_id == guild_id,
+    )
+
+
+def _local_datetime_form_value(value: datetime | None) -> str:
+    if value is None:
+        return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(ZoneInfo(settings.local_timezone)).strftime("%Y-%m-%d %H:%M")
 
 
 class PokEventBot(commands.Bot):
@@ -326,7 +351,7 @@ def _event_embed(
         sections.extend(
             [
                 "### ❌ Event cancelled",
-                "This event is marked as cancelled by the source.",
+                "This event is marked as cancelled by the organiser or source.",
                 "",
                 "━━━━━━━━━━━━━━━━━━━━",
                 "",
@@ -371,6 +396,17 @@ def _event_embed(
             ]
         )
 
+    if event.description:
+        sections.extend(
+            [
+                "",
+                "━━━━━━━━━━━━━━━━━━━━",
+                "",
+                "### 📝 Details",
+                event.description[:1500],
+            ]
+        )
+
     title = event.title
     if event.status == "cancelled":
         title = f"❌ CANCELLED · {title}"
@@ -382,7 +418,12 @@ def _event_embed(
         timestamp=event.starts_at,
         colour=discord.Colour.red() if event.status == "cancelled" else None,
     )
-    embed.set_footer(text="PokÈvent 3.0 · Play! Pokémon")
+    footer = (
+        "PokÈvent 3.0 · Community event"
+        if event.source == COMMUNITY_SOURCE
+        else "PokÈvent 3.0 · Play! Pokémon"
+    )
+    embed.set_footer(text=footer)
     return embed
 
 def _event_link_view(event: Event) -> discord.ui.View | None:
@@ -693,6 +734,7 @@ def _event_snapshot(event: Event) -> dict:
         "address": _clean_location_value(event.address),
         "city": _clean_location_value(event.city),
         "postcode": _clean_location_value(event.postcode),
+        "description": event.description,
         "registration_url": _safe_http_url(event.registration_url),
         "source_url": _safe_http_url(event.source_url),
     }
@@ -803,6 +845,9 @@ def _event_update_notice(
             f"**Game:** {_snapshot_text(previous.get('game'))} "
             f"→ {_snapshot_text(current['game'])}"
         )
+
+    if previous.get("description") != current["description"]:
+        changes.append("**Event details:** updated")
 
     if previous.get("registration_url") != current["registration_url"]:
         changes.append("**Registration link:** updated")
@@ -1168,6 +1213,7 @@ async def refresh_guild_summary_messages(guild_id: str) -> int:
                         .where(
                             Event.status == "active",
                             Event.starts_at >= now,
+                            _guild_visible_event_clause(guild_id),
                             Event.upstream_organisation_id.in_(league_ids),
                         )
                         .order_by(Event.starts_at)
@@ -1320,6 +1366,7 @@ async def _backfill_target(guild_id: str, target: str, count: int) -> int:
                         .where(
                             Event.status == "active",
                             Event.starts_at >= datetime.now(UTC),
+                            _guild_visible_event_clause(guild_id),
                             Event.upstream_organisation_id
                             == route.upstream_organisation_id,
                         )
@@ -1407,6 +1454,7 @@ async def _publish_route(route: Route) -> None:
                     .where(
                         Event.upstream_organisation_id
                         == route.upstream_organisation_id,
+                        _guild_visible_event_clause(route.guild_id),
                         or_(
                             Event.starts_at >= now,
                             Event.id.in_(published_event_ids),
@@ -1847,6 +1895,7 @@ async def _preview_event_target(
                 .where(
                     Event.starts_at >= datetime.now(UTC),
                     Event.status == "active",
+                    _guild_visible_event_clause(guild_id),
                     Event.upstream_organisation_id.in_(league_ids),
                 )
                 .order_by(Event.starts_at)
@@ -1859,6 +1908,7 @@ async def _preview_event_target(
                 .where(
                     Event.starts_at >= datetime.now(UTC),
                     Event.status == "active",
+                    _guild_visible_event_clause(guild_id),
                     Event.upstream_organisation_id == league.league_id,
                 )
                 .order_by(Event.starts_at)
@@ -1929,6 +1979,15 @@ class SetupDashboardView(discord.ui.View):
         self.add_item(SetupDashboardButton(self, "welcomes", "Welcomes", row=1))
         self.add_item(SetupDashboardButton(self, "refresh", "Refresh Summary", row=1))
         self.add_item(SetupDashboardButton(self, "close", "Close", row=1))
+        self.add_item(
+            SetupDashboardButton(
+                self,
+                "community",
+                "Community Events",
+                discord.ButtonStyle.primary,
+                row=2,
+            )
+        )
         self.add_item(
             SetupDashboardButton(
                 self,
@@ -2072,6 +2131,17 @@ class SetupDashboardView(discord.ui.View):
             )
             return
 
+        if action == "community":
+            view = await CommunityEventManagerView.load(
+                invoker_id=self.invoker_id,
+                guild_id=self.guild_id,
+            )
+            await interaction.response.edit_message(
+                content=view.content(),
+                view=view,
+            )
+            return
+
         if action == "check":
             await interaction.response.defer()
             try:
@@ -2161,6 +2231,646 @@ class SetupDashboardView(discord.ui.View):
             )
             self.stop()
             return
+
+
+class CommunityEventSelect(discord.ui.Select):
+    def __init__(self, manager: CommunityEventManagerView) -> None:
+        self.manager = manager
+        options: list[discord.SelectOption] = []
+        for event in manager.events[-25:]:
+            status = "Cancelled" if event.status == "cancelled" else "Active"
+            options.append(
+                discord.SelectOption(
+                    label=event.title[:100],
+                    value=event.id,
+                    description=(
+                        f"{_local_datetime_form_value(event.starts_at)} · {status}"
+                    )[:100],
+                    default=event.id == manager.selected_event_id,
+                )
+            )
+
+        super().__init__(
+            placeholder="Choose a community event to manage",
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        self.manager.selected_event_id = self.values[0]
+        self.manager.rebuild()
+        await interaction.response.edit_message(
+            content=self.manager.content(),
+            view=self.manager,
+        )
+
+
+class CommunityLeagueSelect(discord.ui.Select):
+    def __init__(self, manager: CommunityEventManagerView) -> None:
+        self.manager = manager
+        options = [
+            discord.SelectOption(
+                label=league.name[:100],
+                value=league.league_id,
+                description=f"League ID {league.league_id}"[:100],
+                default=league.league_id == manager.selected_league_id,
+            )
+            for league in manager.leagues[:25]
+        ]
+        super().__init__(
+            placeholder="League for new community events",
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        self.manager.selected_league_id = self.values[0]
+        self.manager.rebuild()
+        await interaction.response.edit_message(
+            content=self.manager.content(),
+            view=self.manager,
+        )
+
+
+class CreateCommunityEventModal(discord.ui.Modal):
+    def __init__(self, manager: CommunityEventManagerView) -> None:
+        super().__init__(title="Create Community Event")
+        self.manager = manager
+        self.title_input = discord.ui.TextInput(
+            label="Event title",
+            placeholder="Gym Leader Challenge Night",
+            max_length=500,
+        )
+        self.start_input = discord.ui.TextInput(
+            label="Start (YYYY-MM-DD HH:MM)",
+            placeholder="2026-10-02 19:00",
+            max_length=16,
+        )
+        self.game_input = discord.ui.TextInput(
+            label="Game",
+            placeholder="TCG, VGC, GO or Other",
+            default="TCG",
+            max_length=32,
+        )
+        self.type_input = discord.ui.TextInput(
+            label="Event type",
+            placeholder="Friendly Tournament",
+            default="Community Event",
+            max_length=128,
+        )
+        self.venue_input = discord.ui.TextInput(
+            label="Venue",
+            placeholder="Optional venue name",
+            required=False,
+            max_length=255,
+        )
+        for item in (
+            self.title_input,
+            self.start_input,
+            self.game_input,
+            self.type_input,
+            self.venue_input,
+        ):
+            self.add_item(item)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        league_id = self.manager.selected_league_id
+        if not league_id:
+            await interaction.response.send_message(
+                "Choose a configured League before creating an event.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            starts_at = parse_local_datetime(
+                self.start_input.value,
+                settings.local_timezone,
+            )
+            async with SessionFactory() as session:
+                event = await create_community_event(
+                    session,
+                    guild_id=self.manager.guild_id,
+                    creator_user_id=str(interaction.user.id),
+                    league_id=league_id,
+                    title=self.title_input.value,
+                    starts_at=starts_at,
+                    game=self.game_input.value,
+                    event_type=self.type_input.value,
+                    venue_name=self.venue_input.value,
+                )
+                event_id = event.id
+                await session.commit()
+        except ValueError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        await publish_event_routes_once()
+        await refresh_guild_summary_messages(self.manager.guild_id)
+        view = await CommunityEventManagerView.load(
+            invoker_id=self.manager.invoker_id,
+            guild_id=self.manager.guild_id,
+            selected_event_id=event_id,
+            selected_league_id=league_id,
+        )
+        await interaction.followup.send(
+            content=view.content(
+                notice="Community event created and sent through PokÈvent's normal routing."
+            ),
+            view=view,
+            ephemeral=True,
+        )
+
+
+class EditCommunityEventCoreModal(discord.ui.Modal):
+    def __init__(
+        self,
+        manager: CommunityEventManagerView,
+        event: Event,
+    ) -> None:
+        super().__init__(title="Edit Community Event")
+        self.manager = manager
+        self.event_id = event.id
+        self.title_input = discord.ui.TextInput(
+            label="Event title",
+            default=event.title,
+            max_length=500,
+        )
+        self.start_input = discord.ui.TextInput(
+            label="Start (YYYY-MM-DD HH:MM)",
+            default=_local_datetime_form_value(event.starts_at),
+            max_length=16,
+        )
+        self.game_input = discord.ui.TextInput(
+            label="Game",
+            default=(event.game or "TCG").upper(),
+            max_length=32,
+        )
+        self.type_input = discord.ui.TextInput(
+            label="Event type",
+            default=event.event_type or "Community Event",
+            max_length=128,
+        )
+        self.venue_input = discord.ui.TextInput(
+            label="Venue",
+            default=event.venue_name or "",
+            required=False,
+            max_length=255,
+        )
+        for item in (
+            self.title_input,
+            self.start_input,
+            self.game_input,
+            self.type_input,
+            self.venue_input,
+        ):
+            self.add_item(item)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        try:
+            starts_at = parse_local_datetime(
+                self.start_input.value,
+                settings.local_timezone,
+            )
+            async with SessionFactory() as session:
+                await update_community_event_core(
+                    session,
+                    guild_id=self.manager.guild_id,
+                    event_id=self.event_id,
+                    title=self.title_input.value,
+                    starts_at=starts_at,
+                    game=self.game_input.value,
+                    event_type=self.type_input.value,
+                    venue_name=self.venue_input.value,
+                )
+                await session.commit()
+        except ValueError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        await publish_event_routes_once()
+        await refresh_guild_summary_messages(self.manager.guild_id)
+        view = await CommunityEventManagerView.load(
+            invoker_id=self.manager.invoker_id,
+            guild_id=self.manager.guild_id,
+            selected_event_id=self.event_id,
+            selected_league_id=self.manager.selected_league_id,
+        )
+        await interaction.followup.send(
+            content=view.content(notice="Community event updated."),
+            view=view,
+            ephemeral=True,
+        )
+
+
+class EditCommunityEventDetailsModal(discord.ui.Modal):
+    def __init__(
+        self,
+        manager: CommunityEventManagerView,
+        event: Event,
+    ) -> None:
+        super().__init__(title="Community Event Details")
+        self.manager = manager
+        self.event_id = event.id
+        self.end_input = discord.ui.TextInput(
+            label="End (YYYY-MM-DD HH:MM)",
+            default=_local_datetime_form_value(event.ends_at),
+            placeholder="Optional",
+            required=False,
+            max_length=16,
+        )
+        self.address_input = discord.ui.TextInput(
+            label="Address",
+            default=event.address or "",
+            required=False,
+            style=discord.TextStyle.paragraph,
+            max_length=2000,
+        )
+        self.description_input = discord.ui.TextInput(
+            label="Description",
+            default=event.description or "",
+            required=False,
+            style=discord.TextStyle.paragraph,
+            max_length=2000,
+        )
+        self.registration_input = discord.ui.TextInput(
+            label="Registration / details URL",
+            default=event.registration_url or "",
+            required=False,
+            max_length=1000,
+        )
+        for item in (
+            self.end_input,
+            self.address_input,
+            self.description_input,
+            self.registration_input,
+        ):
+            self.add_item(item)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        try:
+            end_text = self.end_input.value.strip()
+            ends_at = (
+                parse_local_datetime(end_text, settings.local_timezone)
+                if end_text
+                else None
+            )
+            async with SessionFactory() as session:
+                await update_community_event_details(
+                    session,
+                    guild_id=self.manager.guild_id,
+                    event_id=self.event_id,
+                    ends_at=ends_at,
+                    address=self.address_input.value,
+                    description=self.description_input.value,
+                    registration_url=self.registration_input.value,
+                )
+                await session.commit()
+        except ValueError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        await publish_event_routes_once()
+        await refresh_guild_summary_messages(self.manager.guild_id)
+        view = await CommunityEventManagerView.load(
+            invoker_id=self.manager.invoker_id,
+            guild_id=self.manager.guild_id,
+            selected_event_id=self.event_id,
+            selected_league_id=self.manager.selected_league_id,
+        )
+        await interaction.followup.send(
+            content=view.content(notice="Community event details updated."),
+            view=view,
+            ephemeral=True,
+        )
+
+
+class ConfirmCommunityEventCancelView(discord.ui.View):
+    def __init__(
+        self,
+        *,
+        manager: CommunityEventManagerView,
+        event: Event,
+    ) -> None:
+        super().__init__(timeout=120)
+        self.manager = manager
+        self.event_id = event.id
+        self.event_title = event.title
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.manager.invoker_id:
+            return True
+        await interaction.response.send_message(
+            "Only the administrator who opened this setup can use these controls.",
+            ephemeral=True,
+        )
+        return False
+
+    @discord.ui.button(
+        label="Confirm Cancellation",
+        style=discord.ButtonStyle.danger,
+    )
+    async def confirm(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        del button
+        await interaction.response.defer()
+        async with SessionFactory() as session:
+            await cancel_community_event(
+                session,
+                guild_id=self.manager.guild_id,
+                event_id=self.event_id,
+            )
+            await session.commit()
+
+        await publish_event_routes_once()
+        await refresh_guild_summary_messages(self.manager.guild_id)
+        view = await CommunityEventManagerView.load(
+            invoker_id=self.manager.invoker_id,
+            guild_id=self.manager.guild_id,
+            selected_event_id=self.event_id,
+            selected_league_id=self.manager.selected_league_id,
+        )
+        await interaction.edit_original_response(
+            content=view.content(notice=f"Cancelled **{self.event_title}**."),
+            view=view,
+        )
+
+    @discord.ui.button(
+        label="Keep Event",
+        style=discord.ButtonStyle.secondary,
+    )
+    async def keep(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        del button
+        await interaction.response.edit_message(
+            content=self.manager.content(),
+            view=self.manager,
+        )
+
+
+class CommunityEventManagerView(discord.ui.View):
+    def __init__(
+        self,
+        *,
+        invoker_id: int,
+        guild_id: str,
+        events: list[Event],
+        leagues: list[GuildLeague],
+        default_league_id: str | None,
+        selected_event_id: str | None = None,
+        selected_league_id: str | None = None,
+    ) -> None:
+        super().__init__(timeout=600)
+        self.invoker_id = invoker_id
+        self.guild_id = guild_id
+        self.events = events
+        self.leagues = leagues
+        event_ids = {event.id for event in events}
+        league_ids = {league.league_id for league in leagues}
+
+        self.selected_event_id = (
+            selected_event_id
+            if selected_event_id in event_ids
+            else (events[-1].id if events else None)
+        )
+        default_for_create = (
+            default_league_id
+            if default_league_id in league_ids
+            else (leagues[0].league_id if leagues else None)
+        )
+        self.selected_league_id = (
+            selected_league_id
+            if selected_league_id in league_ids
+            else default_for_create
+        )
+        self.rebuild()
+
+    @classmethod
+    async def load(
+        cls,
+        *,
+        invoker_id: int,
+        guild_id: str,
+        selected_event_id: str | None = None,
+        selected_league_id: str | None = None,
+    ) -> CommunityEventManagerView:
+        async with SessionFactory() as session:
+            config = await ensure_guild_config(session, guild_id)
+            events = await list_community_events(session, guild_id=guild_id)
+            leagues = await guild_leagues(session, guild_id)
+            await session.commit()
+        return cls(
+            invoker_id=invoker_id,
+            guild_id=guild_id,
+            events=events,
+            leagues=leagues,
+            default_league_id=config.default_league_id,
+            selected_event_id=selected_event_id,
+            selected_league_id=selected_league_id,
+        )
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.invoker_id:
+            return True
+        await interaction.response.send_message(
+            "Only the administrator who opened this setup can use these controls.",
+            ephemeral=True,
+        )
+        return False
+
+    def selected_event(self) -> Event | None:
+        return next(
+            (event for event in self.events if event.id == self.selected_event_id),
+            None,
+        )
+
+    def content(self, notice: str | None = None) -> str:
+        league_names = {league.league_id: league.name for league in self.leagues}
+        lines = [
+            "## 🗓️ Community Events",
+            (
+                "Create and manage events that are not supplied by Play! Pokémon. "
+                "They use the same PokÈvent cards, summaries, threads and update lifecycle."
+            ),
+            "",
+            (
+                "**Public visibility:** Community events are kept inside the Discord "
+                "server that created them and are hidden from the public PokÈvent calendar."
+            ),
+            f"**Timezone:** {settings.local_timezone}",
+            "",
+        ]
+
+        if self.events:
+            lines.append("### Your events")
+            for event in self.events[-10:]:
+                status = "❌" if event.status == "cancelled" else "•"
+                league_name = league_names.get(
+                    event.upstream_organisation_id or "",
+                    "Unassigned League",
+                )
+                lines.append(
+                    f"{status} **{event.title}** · "
+                    f"{discord.utils.format_dt(event.starts_at, style='f')} · "
+                    f"{league_name}"
+                )
+        else:
+            lines.append(
+                "No community events have been created for this server yet."
+            )
+
+        if self.selected_league_id:
+            league_name = league_names.get(self.selected_league_id, self.selected_league_id)
+            lines.extend(
+                [
+                    "",
+                    f"**League for new events:** {league_name}",
+                ]
+            )
+
+        if notice:
+            lines.extend(["", f"**{notice}**"])
+        return "\n".join(lines)
+
+    def rebuild(self) -> None:
+        self.clear_items()
+        if self.events:
+            self.add_item(CommunityEventSelect(self))
+        if self.leagues:
+            self.add_item(CommunityLeagueSelect(self))
+        self.add_item(self.create_event)
+        self.add_item(self.edit_event)
+        self.add_item(self.edit_details)
+        self.add_item(self.cancel_event)
+        self.add_item(self.back)
+
+        has_event = self.selected_event_id is not None
+        self.edit_event.disabled = not has_event
+        self.edit_details.disabled = not has_event
+        selected = self.selected_event()
+        self.cancel_event.disabled = selected is None or selected.status == "cancelled"
+        self.create_event.disabled = self.selected_league_id is None
+
+    @discord.ui.button(
+        label="Create Event",
+        style=discord.ButtonStyle.success,
+        row=2,
+    )
+    async def create_event(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        del button
+        if not self.selected_league_id:
+            await interaction.response.send_message(
+                "Configure a League before creating a community event.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_modal(CreateCommunityEventModal(self))
+
+    @discord.ui.button(
+        label="Edit Event",
+        style=discord.ButtonStyle.primary,
+        row=2,
+    )
+    async def edit_event(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        del button
+        event = self.selected_event()
+        if event is None:
+            await interaction.response.send_message(
+                "Choose a community event first.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_modal(EditCommunityEventCoreModal(self, event))
+
+    @discord.ui.button(
+        label="Edit Details",
+        style=discord.ButtonStyle.secondary,
+        row=2,
+    )
+    async def edit_details(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        del button
+        event = self.selected_event()
+        if event is None:
+            await interaction.response.send_message(
+                "Choose a community event first.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_modal(
+            EditCommunityEventDetailsModal(self, event)
+        )
+
+    @discord.ui.button(
+        label="Cancel Event",
+        style=discord.ButtonStyle.danger,
+        row=2,
+    )
+    async def cancel_event(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        del button
+        event = self.selected_event()
+        if event is None:
+            await interaction.response.send_message(
+                "Choose a community event first.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.edit_message(
+            content=(
+                "## Cancel community event?\n"
+                f"**{event.title}** will remain in PokÈvent history and any published "
+                "announcement will be updated to show that it is cancelled."
+            ),
+            view=ConfirmCommunityEventCancelView(manager=self, event=event),
+        )
+
+    @discord.ui.button(
+        label="Back",
+        style=discord.ButtonStyle.secondary,
+        row=3,
+    )
+    async def back(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        del button
+        dashboard = SetupDashboardView(
+            invoker_id=self.invoker_id,
+            guild_id=self.guild_id,
+        )
+        await interaction.response.edit_message(
+            content=await _setup_dashboard_content(self.guild_id),
+            view=dashboard,
+        )
 
 
 class EventMentionModeSelect(discord.ui.Select):
@@ -3994,6 +4704,7 @@ async def events(
             .where(
                 Event.starts_at >= datetime.now(UTC),
                 Event.status == "active",
+                _guild_visible_event_clause(guild_id),
                 Event.upstream_organisation_id == chosen.league_id,
             )
             .order_by(Event.starts_at)
@@ -4322,6 +5033,7 @@ async def eventchannel_test(
                     .where(
                         Event.starts_at >= datetime.now(UTC),
                         Event.status == "active",
+                        _guild_visible_event_clause(guild_id),
                         Event.upstream_organisation_id.in_(league_ids),
                     )
                     .order_by(Event.starts_at)
@@ -4334,6 +5046,7 @@ async def eventchannel_test(
                     .where(
                         Event.starts_at >= datetime.now(UTC),
                         Event.status == "active",
+                        _guild_visible_event_clause(guild_id),
                         Event.upstream_organisation_id == league.league_id,
                     )
                     .order_by(Event.starts_at)
