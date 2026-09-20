@@ -2,13 +2,13 @@ import inspect
 from datetime import UTC, datetime
 
 from pokevent import web
+from pokevent.bot_info_site import bot_info_html
 from pokevent.config import (
     DEFAULT_BRAND_LOGO_URL,
     DEFAULT_LEAGUE_LOGOS,
     DEFAULT_LEAGUES,
     Settings,
 )
-from pokevent.bot_info_site import bot_info_html
 from pokevent.models import BotRuntime, Event
 from pokevent.public_site import public_index_html
 
