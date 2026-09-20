@@ -24,9 +24,6 @@ from .community_events import (
     cancel_community_event,
     create_community_event,
     list_community_events,
-    move_community_event,
-    normalise_optional_url,
-    owned_community_event,
     parse_local_datetime,
     update_community_event_core,
     update_community_event_details,
@@ -2351,7 +2348,7 @@ class CreateCommunityEventModal(discord.ui.Modal):
 
         try:
             starts_at = parse_local_datetime(
-                str(self.start_input),
+                self.start_input.value,
                 settings.local_timezone,
             )
             async with SessionFactory() as session:
@@ -2360,11 +2357,11 @@ class CreateCommunityEventModal(discord.ui.Modal):
                     guild_id=self.manager.guild_id,
                     creator_user_id=str(interaction.user.id),
                     league_id=league_id,
-                    title=str(self.title_input),
+                    title=self.title_input.value,
                     starts_at=starts_at,
-                    game=str(self.game_input),
-                    event_type=str(self.type_input),
-                    venue_name=str(self.venue_input),
+                    game=self.game_input.value,
+                    event_type=self.type_input.value,
+                    venue_name=self.venue_input.value,
                 )
                 event_id = event.id
                 await session.commit()
@@ -2437,7 +2434,7 @@ class EditCommunityEventCoreModal(discord.ui.Modal):
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
             starts_at = parse_local_datetime(
-                str(self.start_input),
+                self.start_input.value,
                 settings.local_timezone,
             )
             async with SessionFactory() as session:
@@ -2445,11 +2442,11 @@ class EditCommunityEventCoreModal(discord.ui.Modal):
                     session,
                     guild_id=self.manager.guild_id,
                     event_id=self.event_id,
-                    title=str(self.title_input),
+                    title=self.title_input.value,
                     starts_at=starts_at,
-                    game=str(self.game_input),
-                    event_type=str(self.type_input),
-                    venue_name=str(self.venue_input),
+                    game=self.game_input.value,
+                    event_type=self.type_input.value,
+                    venue_name=self.venue_input.value,
                 )
                 await session.commit()
         except ValueError as exc:
@@ -2518,7 +2515,7 @@ class EditCommunityEventDetailsModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
-            end_text = str(self.end_input).strip()
+            end_text = self.end_input.value.strip()
             ends_at = (
                 parse_local_datetime(end_text, settings.local_timezone)
                 if end_text
@@ -2530,9 +2527,9 @@ class EditCommunityEventDetailsModal(discord.ui.Modal):
                     guild_id=self.manager.guild_id,
                     event_id=self.event_id,
                     ends_at=ends_at,
-                    address=str(self.address_input),
-                    description=str(self.description_input),
-                    registration_url=str(self.registration_input),
+                    address=self.address_input.value,
+                    description=self.description_input.value,
+                    registration_url=self.registration_input.value,
                 )
                 await session.commit()
         except ValueError as exc:
@@ -5049,6 +5046,7 @@ async def eventchannel_test(
                     .where(
                         Event.starts_at >= datetime.now(UTC),
                         Event.status == "active",
+                        _guild_visible_event_clause(guild_id),
                         Event.upstream_organisation_id == league.league_id,
                     )
                     .order_by(Event.starts_at)
