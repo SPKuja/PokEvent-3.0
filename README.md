@@ -115,9 +115,12 @@ Required variables:
 - `POSTGRES_PASSWORD` — strong database password;
 - `POKEVENT_DISCORD_TOKEN` — Discord bot token.
 
-Recommended variable:
+Recommended variables:
 
-- `POKEVENT_PUBLIC_BASE_URL` — public HTTPS URL once reverse proxying is set up.
+- `POKEVENT_PUBLIC_BASE_URL` — public HTTPS URL once reverse proxying is set up;
+- `POKEVENT_LEAGUES` — JSON map of the default League IDs and friendly names
+  monitored by PokÈvent. Keep this in Portainer so new default Leagues can be
+  added without changing or rebuilding the application.
 
 Most other PokÈvent settings already have application defaults and only need to
 be added to Portainer when overriding those defaults.
