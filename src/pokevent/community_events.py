@@ -16,6 +16,12 @@ COMMUNITY_SOURCE = "community"
 COMMUNITY_GAMES = {"tcg", "vgc", "go", "other"}
 
 
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 def parse_local_datetime(value: str, timezone_name: str) -> datetime:
     cleaned = " ".join(value.strip().split())
     try:
@@ -195,7 +201,7 @@ async def update_community_event_core(
         if venue_name and venue_name.strip()
         else None
     )
-    if event.ends_at is not None and event.ends_at <= starts_at:
+    if event.ends_at is not None and _as_utc(event.ends_at) <= _as_utc(starts_at):
         event.ends_at = None
     touch_community_event(event)
     await session.flush()
@@ -213,7 +219,10 @@ async def update_community_event_details(
     registration_url: str | None,
 ) -> Event:
     event = await owned_community_event(session, guild_id=guild_id, event_id=event_id)
-    if ends_at is not None and ends_at <= event.starts_at:
+    if (
+        ends_at is not None
+        and _as_utc(ends_at) <= _as_utc(event.starts_at)
+    ):
         raise ValueError("End time must be after the event start time.")
 
     event.ends_at = ends_at
