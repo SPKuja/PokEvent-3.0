@@ -10,6 +10,7 @@ import random
 import re
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
@@ -18,6 +19,18 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 from sqlalchemy import or_, select
 
 from . import __version__
+from .community_events import (
+    COMMUNITY_SOURCE,
+    cancel_community_event,
+    create_community_event,
+    list_community_events,
+    move_community_event,
+    normalise_optional_url,
+    owned_community_event,
+    parse_local_datetime,
+    update_community_event_core,
+    update_community_event_details,
+)
 from .config import get_settings
 from .db import SessionFactory
 from .event_policy import (
@@ -57,6 +70,21 @@ ANNOUNCEMENT_CHANNEL_TYPES = [
     discord.ChannelType.text,
     discord.ChannelType.news,
 ]
+
+
+def _guild_visible_event_clause(guild_id: str):
+    return or_(
+        Event.source != COMMUNITY_SOURCE,
+        Event.owner_guild_id == guild_id,
+    )
+
+
+def _local_datetime_form_value(value: datetime | None) -> str:
+    if value is None:
+        return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(ZoneInfo(settings.local_timezone)).strftime("%Y-%m-%d %H:%M")
 
 
 class PokEventBot(commands.Bot):
@@ -326,7 +354,7 @@ def _event_embed(
         sections.extend(
             [
                 "### ❌ Event cancelled",
-                "This event is marked as cancelled by the source.",
+                "This event is marked as cancelled by the organiser or source.",
                 "",
                 "━━━━━━━━━━━━━━━━━━━━",
                 "",
@@ -371,6 +399,17 @@ def _event_embed(
             ]
         )
 
+    if event.description:
+        sections.extend(
+            [
+                "",
+                "━━━━━━━━━━━━━━━━━━━━",
+                "",
+                "### 📝 Details",
+                event.description[:1500],
+            ]
+        )
+
     title = event.title
     if event.status == "cancelled":
         title = f"❌ CANCELLED · {title}"
@@ -382,7 +421,12 @@ def _event_embed(
         timestamp=event.starts_at,
         colour=discord.Colour.red() if event.status == "cancelled" else None,
     )
-    embed.set_footer(text="PokÈvent 3.0 · Play! Pokémon")
+    footer = (
+        "PokÈvent 3.0 · Community event"
+        if event.source == COMMUNITY_SOURCE
+        else "PokÈvent 3.0 · Play! Pokémon"
+    )
+    embed.set_footer(text=footer)
     return embed
 
 def _event_link_view(event: Event) -> discord.ui.View | None:
@@ -693,6 +737,7 @@ def _event_snapshot(event: Event) -> dict:
         "address": _clean_location_value(event.address),
         "city": _clean_location_value(event.city),
         "postcode": _clean_location_value(event.postcode),
+        "description": event.description,
         "registration_url": _safe_http_url(event.registration_url),
         "source_url": _safe_http_url(event.source_url),
     }
@@ -803,6 +848,9 @@ def _event_update_notice(
             f"**Game:** {_snapshot_text(previous.get('game'))} "
             f"→ {_snapshot_text(current['game'])}"
         )
+
+    if previous.get("description") != current["description"]:
+        changes.append("**Event details:** updated")
 
     if previous.get("registration_url") != current["registration_url"]:
         changes.append("**Registration link:** updated")
@@ -1168,6 +1216,7 @@ async def refresh_guild_summary_messages(guild_id: str) -> int:
                         .where(
                             Event.status == "active",
                             Event.starts_at >= now,
+                            _guild_visible_event_clause(guild_id),
                             Event.upstream_organisation_id.in_(league_ids),
                         )
                         .order_by(Event.starts_at)
@@ -1320,6 +1369,7 @@ async def _backfill_target(guild_id: str, target: str, count: int) -> int:
                         .where(
                             Event.status == "active",
                             Event.starts_at >= datetime.now(UTC),
+                            _guild_visible_event_clause(guild_id),
                             Event.upstream_organisation_id
                             == route.upstream_organisation_id,
                         )
@@ -1407,6 +1457,7 @@ async def _publish_route(route: Route) -> None:
                     .where(
                         Event.upstream_organisation_id
                         == route.upstream_organisation_id,
+                        _guild_visible_event_clause(route.guild_id),
                         or_(
                             Event.starts_at >= now,
                             Event.id.in_(published_event_ids),
@@ -1847,6 +1898,7 @@ async def _preview_event_target(
                 .where(
                     Event.starts_at >= datetime.now(UTC),
                     Event.status == "active",
+                    _guild_visible_event_clause(guild_id),
                     Event.upstream_organisation_id.in_(league_ids),
                 )
                 .order_by(Event.starts_at)
@@ -1859,6 +1911,7 @@ async def _preview_event_target(
                 .where(
                     Event.starts_at >= datetime.now(UTC),
                     Event.status == "active",
+                    _guild_visible_event_clause(guild_id),
                     Event.upstream_organisation_id == league.league_id,
                 )
                 .order_by(Event.starts_at)
@@ -1929,6 +1982,15 @@ class SetupDashboardView(discord.ui.View):
         self.add_item(SetupDashboardButton(self, "welcomes", "Welcomes", row=1))
         self.add_item(SetupDashboardButton(self, "refresh", "Refresh Summary", row=1))
         self.add_item(SetupDashboardButton(self, "close", "Close", row=1))
+        self.add_item(
+            SetupDashboardButton(
+                self,
+                "community",
+                "Community Events",
+                discord.ButtonStyle.primary,
+                row=2,
+            )
+        )
         self.add_item(
             SetupDashboardButton(
                 self,
@@ -2065,6 +2127,17 @@ class SetupDashboardView(discord.ui.View):
                 invoker_id=self.invoker_id,
                 guild_id=self.guild_id,
                 leagues=leagues,
+            )
+            await interaction.response.edit_message(
+                content=view.content(),
+                view=view,
+            )
+            return
+
+        if action == "community":
+            view = await CommunityEventManagerView.load(
+                invoker_id=self.invoker_id,
+                guild_id=self.guild_id,
             )
             await interaction.response.edit_message(
                 content=view.content(),
@@ -3994,6 +4067,7 @@ async def events(
             .where(
                 Event.starts_at >= datetime.now(UTC),
                 Event.status == "active",
+                _guild_visible_event_clause(guild_id),
                 Event.upstream_organisation_id == chosen.league_id,
             )
             .order_by(Event.starts_at)
@@ -4322,6 +4396,7 @@ async def eventchannel_test(
                     .where(
                         Event.starts_at >= datetime.now(UTC),
                         Event.status == "active",
+                        _guild_visible_event_clause(guild_id),
                         Event.upstream_organisation_id.in_(league_ids),
                     )
                     .order_by(Event.starts_at)
