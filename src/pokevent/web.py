@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-import time
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 
@@ -16,18 +14,11 @@ from . import __version__
 from .bot_info_site import bot_info_html
 from .config import get_settings
 from .db import SessionFactory
-from .domain import EventSnapshot
-from .location_search import LocationSearchError, search_live_events
 from .models import BotRuntime, Event, Organisation
 from .public_site import public_index_html
-from .search_site import search_page_html
 
 settings = get_settings()
 app = FastAPI(title="PokÈvent", version=__version__)
-SEARCH_CACHE_SECONDS = 60
-_search_cache: dict[tuple[str, int], tuple[float, dict]] = {}
-_search_lock = asyncio.Lock()
-
 
 @app.get("/health")
 async def health() -> dict[str, str]:
@@ -83,36 +74,6 @@ def _public_event_payload(
         "registration_url": _safe_public_url(event.registration_url),
     }
 
-
-
-def _public_snapshot_payload(snapshot: EventSnapshot) -> dict:
-    league_id = snapshot.upstream_organisation_id
-    league_name = (
-        settings.leagues.get(league_id or "")
-        or snapshot.organisation_name
-        or snapshot.venue_name
-        or "Play! Pokémon"
-    )
-    return {
-        "id": snapshot.upstream_event_id,
-        "title": snapshot.title,
-        "game": snapshot.game.value if snapshot.game else None,
-        "event_type": snapshot.event_type,
-        "status": snapshot.status.value,
-        "starts_at": snapshot.starts_at,
-        "ends_at": snapshot.ends_at,
-        "league_id": league_id,
-        "league_name": league_name,
-        "league_logo": _public_logo_url(league_id),
-        "venue_name": snapshot.venue_name,
-        "address": snapshot.address,
-        "city": snapshot.city,
-        "postcode": snapshot.postcode,
-        "latitude": snapshot.latitude,
-        "longitude": snapshot.longitude,
-        "source_url": _safe_public_url(snapshot.source_url),
-        "registration_url": _safe_public_url(snapshot.registration_url),
-    }
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -196,82 +157,6 @@ async def bot_info_api() -> dict:
     async with SessionFactory() as session:
         runtime = await session.get(BotRuntime, "discord")
     return _bot_info_payload(runtime)
-
-
-async def _live_search_payload(
-    query: str,
-    radius_miles: int,
-) -> dict:
-    cleaned = " ".join(query.strip().split())[:100]
-    if len(cleaned) < 2:
-        raise HTTPException(status_code=400, detail="Enter a town or UK postcode.")
-
-    if radius_miles not in {10, 25, 50}:
-        raise HTTPException(
-            status_code=400,
-            detail="Search radius must be 10, 25 or 50 miles.",
-        )
-
-    cache_key = (cleaned.casefold(), radius_miles)
-    cached = _search_cache.get(cache_key)
-    now_monotonic = time.monotonic()
-    if cached and now_monotonic - cached[0] < SEARCH_CACHE_SECONDS:
-        return cached[1]
-
-    async with _search_lock:
-        cached = _search_cache.get(cache_key)
-        now_monotonic = time.monotonic()
-        if cached and now_monotonic - cached[0] < SEARCH_CACHE_SECONDS:
-            return cached[1]
-
-        try:
-            location, snapshots = await search_live_events(
-                cleaned,
-                radius_miles=radius_miles,
-                settings=settings,
-            )
-        except LocationSearchError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(
-                status_code=503,
-                detail="Live event search is temporarily unavailable.",
-            ) from exc
-
-        payload = {
-            "query": cleaned,
-            "location": {
-                "label": location.label,
-                "latitude": location.latitude,
-                "longitude": location.longitude,
-                "kind": location.kind,
-            },
-            "radius_miles": radius_miles,
-            "events": [
-                _public_snapshot_payload(snapshot)
-                for snapshot in snapshots[:200]
-            ],
-        }
-        _search_cache[cache_key] = (time.monotonic(), payload)
-        return payload
-
-
-@app.get("/search", response_class=HTMLResponse)
-async def search_page() -> HTMLResponse:
-    return HTMLResponse(
-        search_page_html(
-            community_name=settings.community_name,
-            brand_logo_url=_safe_public_url(settings.brand_logo_url) or "",
-        )
-    )
-
-
-@app.get("/api/search")
-async def search_events(
-    q: str = "",
-    radius: int = 25,
-) -> dict:
-    return await _live_search_payload(q, radius)
 
 
 @app.get("/api/events")
