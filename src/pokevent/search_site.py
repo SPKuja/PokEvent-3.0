@@ -31,8 +31,8 @@ h1 {{ margin-bottom:0; font-size:clamp(28px,4vw,40px); letter-spacing:-.04em }}
 .search-panel {{ background:var(--panel); border:1px solid var(--line); border-radius:22px; padding:22px; box-shadow:0 8px 28px rgba(73,43,38,.07); margin-bottom:20px }}
 .search-panel h2 {{ margin-bottom:7px }}
 .search-panel p {{ color:var(--muted); margin-bottom:16px }}
-.search-row {{ display:grid; grid-template-columns:1fr auto; gap:9px }}
-input {{ width:100%; border:1px solid var(--line); border-radius:11px; padding:12px 14px; background:#fff; color:var(--text) }}
+.search-row {{ display:grid; grid-template-columns:1fr 150px auto; gap:9px }}
+input,select {{ width:100%; border:1px solid var(--line); border-radius:11px; padding:12px 14px; background:#fff; color:var(--text); font:inherit }}
 button {{ border:0; border-radius:11px; padding:12px 18px; color:#fff; background:var(--accent); font-weight:800; cursor:pointer }}
 button:hover {{ background:var(--accent-dark) }}
 .toolbar {{ display:flex; justify-content:space-between; align-items:center; gap:12px; margin:18px 0 }}
@@ -78,9 +78,14 @@ footer {{ margin-top:22px; text-align:center; color:var(--muted); font-size:12px
 
 <section class="search-panel">
   <h2>Find Pokémon events</h2>
-  <p>Search PokÈvent's current discovery catalogue by town, postcode, venue or address.</p>
+  <p>Search the live Play! Pokémon event catalogue around a UK town or postcode.</p>
   <form id="searchForm" class="search-row">
-    <input id="query" type="search" maxlength="100" autocomplete="postal-code" placeholder="e.g. Swindon, SN1 or The Brunel">
+    <input id="query" type="search" maxlength="100" autocomplete="postal-code" placeholder="e.g. Swindon, Bath or SN1 1AA">
+    <select id="radius" aria-label="Search radius">
+      <option value="10">10 miles</option>
+      <option value="25" selected>25 miles</option>
+      <option value="50">50 miles</option>
+    </select>
     <button type="submit">Search events</button>
   </form>
 </section>
@@ -91,7 +96,7 @@ footer {{ margin-top:22px; text-align:center; color:var(--muted); font-size:12px
     <span class="meta" id="resultCount"></span>
   </div>
   <div id="results" class="results">
-    <div class="empty">Enter a town, postcode, venue or address to find upcoming events.</div>
+    <div class="empty">Enter a UK town or postcode to search the live event catalogue.</div>
   </div>
 </section>
 
@@ -126,7 +131,7 @@ function render(rows,q){{
       +'</div><div class="date-block"><strong>'+esc(dateOnly(e.starts_at))+'</strong><span class="meta">'+esc(timeOnly(e.starts_at))+'</span></div></article>';
   }}).join("");
 }}
-async function runSearch(q){{
+async function runSearch(q,radius){{
   q=(q||"").trim();
   if(q.length<2){{
     document.getElementById("resultCount").textContent="";
@@ -136,9 +141,10 @@ async function runSearch(q){{
   }}
   document.getElementById("results").innerHTML='<div class="empty">Searching…</div>';
   try{{
-    var response=await fetch("/api/search?q="+encodeURIComponent(q)+"&limit=100",{{cache:"no-store"}});
-    var rows=await response.json();
-    render(rows,q);
+    var response=await fetch("/api/search?q="+encodeURIComponent(q)+"&radius="+encodeURIComponent(radius),{{cache:"no-store"}});
+    var data=await response.json();
+    if(!response.ok)throw new Error(data.detail||"Search failed");
+    render(data.events||[],data.location&&data.location.label?data.location.label:q);
   }}catch(error){{
     document.getElementById("results").innerHTML='<div class="empty">Search is temporarily unavailable.</div>';
   }}
@@ -146,15 +152,20 @@ async function runSearch(q){{
 document.getElementById("searchForm").addEventListener("submit",function(event){{
   event.preventDefault();
   var q=document.getElementById("query").value.trim();
+  var radius=document.getElementById("radius").value;
   var url=new URL(window.location.href);
   if(q)url.searchParams.set("q",q);else url.searchParams.delete("q");
+  url.searchParams.set("radius",radius);
   history.replaceState(null,"",url);
-  runSearch(q);
+  runSearch(q,radius);
 }});
-var initial=new URLSearchParams(location.search).get("q")||"";
+var params=new URLSearchParams(location.search);
+var initial=params.get("q")||"";
+var initialRadius=params.get("radius")||"25";
+if(["10","25","50"].includes(initialRadius))document.getElementById("radius").value=initialRadius;
 if(initial){{
   document.getElementById("query").value=initial;
-  runSearch(initial);
+  runSearch(initial,document.getElementById("radius").value);
 }}
 </script>
 </body>

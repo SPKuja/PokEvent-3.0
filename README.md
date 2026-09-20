@@ -130,9 +130,9 @@ private default network.
 ## Public web pages
 
 - `GET /` — configured-League calendar and list view.
-- `GET /search` — search the current PokÈvent discovery catalogue by town, postcode, venue or address.
+- `GET /search` — on-demand UK event search by town or postcode, with 10/25/50-mile radius options. Locations are resolved with Postcodes.io and events are fetched live from the configured Play! Pokémon source.
 - `GET /bot` — live Discord bot status, uptime, server count, invite link and command reference.
-- `GET /api/search?q=Swindon` — JSON location search for upcoming active events.
+- `GET /api/search?q=Swindon&radius=25` — live JSON event search around the resolved location.
 
 
 The `/pokevent setup` admin dashboard includes **Check New Events**, which runs an immediate source sync, publishes any genuinely new routed events and refreshes the server's rolling summaries.

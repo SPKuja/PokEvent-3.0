@@ -1,6 +1,8 @@
 import inspect
 from datetime import UTC, datetime
 
+import httpx
+
 from pokevent import web
 from pokevent.bot_info_site import bot_info_html
 from pokevent.config import (
@@ -9,6 +11,7 @@ from pokevent.config import (
     DEFAULT_LEAGUES,
     Settings,
 )
+from pokevent.location_search import resolve_location
 from pokevent.models import BotRuntime, Event
 from pokevent.public_site import public_index_html
 from pokevent.search_site import search_page_html
@@ -228,13 +231,67 @@ def test_search_page_supports_location_queries() -> None:
     )
 
     assert "Find Pokémon events" in html
-    assert "town, postcode, venue or address" in html
+    assert "live Play! Pokémon event catalogue" in html
     assert 'id="searchForm"' in html
     assert "/api/search?q=" in html
 
 
-def test_search_value_normalises_spaces_and_escapes_wildcards() -> None:
-    normalised, pattern = web._search_value("  SN1   1AA%  ")
+def test_live_search_defaults_to_25_mile_radius() -> None:
+    parameters = inspect.signature(web.search_events).parameters
 
-    assert normalised == "SN1 1AA%"
-    assert pattern == r"%SN1 1AA\%%"
+    assert parameters["radius"].default == 25
+
+
+async def test_resolve_location_uses_exact_postcode_coordinates() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/postcodes/SN11AA")
+        return httpx.Response(
+            200,
+            json={
+                "status": 200,
+                "result": {
+                    "postcode": "SN1 1AA",
+                    "latitude": 51.5615,
+                    "longitude": -1.7855,
+                },
+            },
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        location = await resolve_location("SN1 1AA", client=client)
+
+    assert location.label == "SN1 1AA"
+    assert location.kind == "postcode"
+    assert location.latitude == 51.5615
+    assert location.longitude == -1.7855
+
+
+async def test_resolve_location_uses_place_search_for_town() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/places")
+        assert request.url.params["q"] == "Swindon"
+        return httpx.Response(
+            200,
+            json={
+                "status": 200,
+                "result": [
+                    {
+                        "name_1": "Swindon",
+                        "county_unitary": "Swindon",
+                        "local_type": "Town",
+                        "latitude": 51.5615,
+                        "longitude": -1.7855,
+                    }
+                ],
+            },
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        location = await resolve_location("Swindon", client=client)
+
+    assert location.label == "Swindon"
+    assert location.kind == "place"
