@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pokevent"
+version = "3.0.0a1"
+description = "Community-first Play! Pokémon event discovery, routing and publishing."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "aiosqlite>=0.21,<1",
+  "alembic>=1.16,<2",
+  "asyncpg>=0.30,<1",
+  "discord.py>=2.6,<3",
+  "fastapi>=0.116,<1",
+  "httpx>=0.28,<1",
+  "icalendar>=6.3,<7",
+  "pydantic-settings>=2.10,<3",
+  "sqlalchemy[asyncio]>=2.0.43,<3",
+  "uvicorn[standard]>=0.35,<1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.4,<9", "pytest-asyncio>=1.1,<2", "ruff>=0.12,<1"]
+
+[project.scripts]
+pokevent-web = "pokevent.web:main"
+pokevent-bot = "pokevent.discord_bot:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pokevent"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
