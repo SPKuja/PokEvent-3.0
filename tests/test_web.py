@@ -1,6 +1,10 @@
 import inspect
 from datetime import UTC, datetime
 
+import pytest
+from fastapi import HTTPException
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
 from pokevent import web
 from pokevent.bot_info_site import bot_info_html
 from pokevent.config import (
@@ -9,7 +13,7 @@ from pokevent.config import (
     DEFAULT_LEAGUES,
     Settings,
 )
-from pokevent.models import BotRuntime, Event
+from pokevent.models import Base, BotRuntime, Event
 from pokevent.public_site import public_index_html
 
 
@@ -216,3 +220,53 @@ def test_bot_info_page_lists_public_commands() -> None:
     assert "/pokevent setup" in html
     assert "/pokevent status" in html
     assert 'id="botAvatar"' in html
+
+
+
+@pytest.mark.asyncio
+async def test_public_surfaces_hide_private_community_events(monkeypatch) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    official = Event(
+        source="pokedata",
+        upstream_event_id="official-public",
+        upstream_organisation_id="2012924",
+        title="Official Public Event",
+        starts_at=datetime(2026, 10, 10, 10, 0, tzinfo=UTC),
+        content_hash="official",
+        public_visible=True,
+    )
+    community = Event(
+        source="community",
+        upstream_event_id="community-private",
+        upstream_organisation_id="2012924",
+        owner_guild_id="guild-1",
+        title="Private Community Event",
+        starts_at=datetime(2026, 10, 10, 11, 0, tzinfo=UTC),
+        content_hash="community",
+        public_visible=False,
+    )
+
+    async with sessions() as session:
+        session.add_all([official, community])
+        await session.commit()
+        community_id = community.id
+
+    monkeypatch.setattr(web, "SessionFactory", sessions)
+
+    rows = await web.upcoming_events(configured_only=False)
+    assert [row["title"] for row in rows] == ["Official Public Event"]
+
+    calendar = await web.calendar_feed(configured_only=False)
+    payload = bytes(calendar.body).decode()
+    assert "Official Public Event" in payload
+    assert "Private Community Event" not in payload
+
+    with pytest.raises(HTTPException) as exc:
+        await web.event_calendar_file(community_id)
+    assert exc.value.status_code == 404
+
+    await engine.dispose()
