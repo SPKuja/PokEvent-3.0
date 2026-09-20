@@ -81,7 +81,7 @@ footer {{ margin-top:20px; text-align:center; color:var(--muted); font-size:12px
 </header>
 <nav class="site-nav" aria-label="PokÈvent">
   <a href="/">Events</a>
-  <a href="/search">Search</a>
+  <a href="https://events.pokemon.com/EventLocator/?locale=en-us" target="_blank" rel="noopener">Find Events</a>
   <a href="/bot" class="active">Bot Info</a>
 </nav>
 
