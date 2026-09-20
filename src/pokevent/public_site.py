@@ -89,7 +89,7 @@ dialog::backdrop {{ background:rgba(54,32,30,.55) }}
 <body>
 <main class="shell">
 <header><img class="brand-logo" src="{brand_logo}" alt="PokÈvent 3.0"><div><div class="eyebrow">Play • Trade • Battle</div><h1>PokÈvent</h1></div></header>
-<nav class="site-nav" aria-label="PokÈvent"><a href="/" class="active">Events</a><a href="/bot">Bot Info</a></nav>
+<nav class="site-nav" aria-label="PokÈvent"><a href="/" class="active">Events</a><a href="/search">Search</a><a href="/bot">Bot Info</a></nav>
 <section class="controls">
   <div class="switcher"><button id="calendarMode" class="active">Calendar</button><button id="listMode">List</button></div>
   <div class="filters">

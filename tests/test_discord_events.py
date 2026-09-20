@@ -8,6 +8,7 @@ from pokevent.discord_bot import (
     ANNOUNCEMENT_CHANNEL_TYPES,
     EVENTS_PAGE_SIZE,
     POKEMON_WELCOME_MESSAGES,
+    SetupDashboardView,
     _event_announcement_mentions,
     _event_cleanup_at,
     _event_embed,
@@ -388,3 +389,15 @@ def test_public_calendar_url_rejects_invalid_base_url(monkeypatch) -> None:
     )
 
     assert _public_calendar_url() is None
+
+
+
+def test_admin_dashboard_has_manual_event_check() -> None:
+    dashboard = SetupDashboardView(invoker_id=1, guild_id="guild-1")
+    labels = {
+        item.label
+        for item in dashboard.children
+        if isinstance(item, discord.ui.Button)
+    }
+
+    assert "Check New Events" in labels

@@ -230,6 +230,7 @@ class BotRuntime(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     bot_user_id: Mapped[str | None] = mapped_column(String(32))
     bot_name: Mapped[str | None] = mapped_column(String(255))
+    avatar_url: Mapped[str | None] = mapped_column(Text)
     guild_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(

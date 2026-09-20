@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 
@@ -8,7 +9,7 @@ from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import HTMLResponse
 from icalendar import Calendar
 from icalendar import Event as CalendarEvent
-from sqlalchemy import select, text
+from sqlalchemy import func, or_, select, text
 
 from . import __version__
 from .bot_info_site import bot_info_html
@@ -16,6 +17,7 @@ from .config import get_settings
 from .db import SessionFactory
 from .models import BotRuntime, Event, Organisation
 from .public_site import public_index_html
+from .search_site import search_page_html
 
 settings = get_settings()
 app = FastAPI(title="PokÈvent", version=__version__)
@@ -71,8 +73,8 @@ def _public_event_payload(
         "postcode": event.postcode,
         "latitude": event.latitude,
         "longitude": event.longitude,
-        "source_url": event.source_url,
-        "registration_url": event.registration_url,
+        "source_url": _safe_public_url(event.source_url),
+        "registration_url": _safe_public_url(event.registration_url),
     }
 
 
@@ -97,6 +99,7 @@ def _bot_info_payload(
     invite_url: str | None = None
     bot_name: str | None = None
     server_count: int | None = None
+    avatar_url: str | None = None
     started_at: datetime | None = None
     last_seen_at: datetime | None = None
 
@@ -104,6 +107,7 @@ def _bot_info_payload(
         started_at = runtime.started_at
         last_seen_at = runtime.last_seen_at
         bot_name = runtime.bot_name
+        avatar_url = _safe_public_url(runtime.avatar_url)
         server_count = runtime.guild_count
 
         if started_at.tzinfo is None:
@@ -132,6 +136,7 @@ def _bot_info_payload(
         "server_count": server_count,
         "version": __version__,
         "bot_name": bot_name,
+        "avatar_url": avatar_url,
         "started_at": started_at,
         "last_seen_at": last_seen_at,
         "configured_league_count": len(settings.leagues),
@@ -154,6 +159,69 @@ async def bot_info_api() -> dict:
     async with SessionFactory() as session:
         runtime = await session.get(BotRuntime, "discord")
     return _bot_info_payload(runtime)
+
+
+def _search_value(value: str) -> tuple[str, str]:
+    normalised = " ".join(value.strip().split())[:100]
+    escaped = (
+        normalised.replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+    return normalised, f"%{escaped}%"
+
+
+@app.get("/search", response_class=HTMLResponse)
+async def search_page() -> HTMLResponse:
+    return HTMLResponse(
+        search_page_html(
+            community_name=settings.community_name,
+            brand_logo_url=_safe_public_url(settings.brand_logo_url) or "",
+        )
+    )
+
+
+@app.get("/api/search")
+async def search_events(q: str = "", limit: int = 100) -> list[dict]:
+    normalised, pattern = _search_value(q)
+    if len(normalised) < 2:
+        return []
+
+    compact = re.sub(r"\s+", "", normalised)
+    _, compact_pattern = _search_value(compact)
+    now = datetime.now(UTC)
+
+    location_match = or_(
+        Event.city.ilike(pattern, escape="\\"),
+        Event.postcode.ilike(pattern, escape="\\"),
+        func.replace(Event.postcode, " ", "").ilike(
+            compact_pattern,
+            escape="\\",
+        ),
+        Event.venue_name.ilike(pattern, escape="\\"),
+        Event.address.ilike(pattern, escape="\\"),
+        Organisation.name.ilike(pattern, escape="\\"),
+    )
+
+    async with SessionFactory() as session:
+        rows = (
+            await session.execute(
+                select(Event, Organisation.name)
+                .outerjoin(Organisation, Event.organisation_id == Organisation.id)
+                .where(
+                    Event.starts_at >= now,
+                    Event.status == "active",
+                    location_match,
+                )
+                .order_by(Event.starts_at)
+                .limit(min(max(limit, 1), 200))
+            )
+        ).all()
+
+    return [
+        _public_event_payload(event, organisation_name)
+        for event, organisation_name in rows
+    ]
 
 
 @app.get("/api/events")

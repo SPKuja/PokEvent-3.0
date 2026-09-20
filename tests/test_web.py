@@ -11,6 +11,7 @@ from pokevent.config import (
 )
 from pokevent.models import BotRuntime, Event
 from pokevent.public_site import public_index_html
+from pokevent.search_site import search_page_html
 
 
 def _event() -> Event:
@@ -147,6 +148,7 @@ def test_bot_info_payload_reports_online_runtime() -> None:
         id="discord",
         bot_user_id="123456789",
         bot_name="PokÈvent#0001",
+        avatar_url="https://cdn.discordapp.com/avatars/123/avatar.png",
         guild_count=7,
         started_at=datetime(2026, 9, 20, 8, 0, tzinfo=UTC),
         last_seen_at=datetime(2026, 9, 20, 9, 59, 30, tzinfo=UTC),
@@ -161,6 +163,7 @@ def test_bot_info_payload_reports_online_runtime() -> None:
     assert payload["uptime_seconds"] == 7200
     assert payload["server_count"] == 7
     assert payload["bot_name"] == "PokÈvent#0001"
+    assert payload["avatar_url"] == "https://cdn.discordapp.com/avatars/123/avatar.png"
     assert "client_id=123456789" in payload["invite_url"]
     assert "applications.commands" in payload["invite_url"]
 
@@ -182,3 +185,56 @@ def test_bot_info_payload_marks_stale_heartbeat_offline() -> None:
 
     assert payload["online"] is False
     assert payload["uptime_seconds"] == 6900
+
+
+
+def test_public_pages_use_consistent_width_and_navigation() -> None:
+    calendar_html = public_index_html(
+        community_name="Pokémon League Swindon",
+        brand_logo_url=DEFAULT_BRAND_LOGO_URL,
+    )
+    bot_html = bot_info_html(
+        community_name="Pokémon League Swindon",
+        brand_logo_url=DEFAULT_BRAND_LOGO_URL,
+    )
+    search_html = search_page_html(
+        community_name="Pokémon League Swindon",
+        brand_logo_url=DEFAULT_BRAND_LOGO_URL,
+    )
+
+    for html in (calendar_html, bot_html, search_html):
+        assert "width:min(1180px" in html
+        assert 'href="/search"' in html
+        assert 'href="/bot"' in html
+
+
+def test_bot_info_page_lists_public_commands() -> None:
+    html = bot_info_html(
+        community_name="Pokémon League Swindon",
+        brand_logo_url=DEFAULT_BRAND_LOGO_URL,
+    )
+
+    assert "/events [league]" in html
+    assert "/calendar" in html
+    assert "/pokevent setup" in html
+    assert "/pokevent status" in html
+    assert 'id="botAvatar"' in html
+
+
+def test_search_page_supports_location_queries() -> None:
+    html = search_page_html(
+        community_name="Pokémon League Swindon",
+        brand_logo_url=DEFAULT_BRAND_LOGO_URL,
+    )
+
+    assert "Find Pokémon events" in html
+    assert "town, postcode, venue or address" in html
+    assert 'id="searchForm"' in html
+    assert "/api/search?q=" in html
+
+
+def test_search_value_normalises_spaces_and_escapes_wildcards() -> None:
+    normalised, pattern = web._search_value("  SN1   1AA%  ")
+
+    assert normalised == "SN1 1AA%"
+    assert pattern == r"%SN1 1AA\%%"

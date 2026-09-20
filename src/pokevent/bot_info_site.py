@@ -18,7 +18,7 @@ def bot_info_html(*, community_name: str, brand_logo_url: str) -> str:
 * {{ box-sizing:border-box }}
 body {{ margin:0; background:linear-gradient(180deg,#fff 0,#f8f4f1 210px,var(--bg) 520px); color:var(--text); font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif }}
 a {{ color:inherit }}
-.shell {{ width:min(1060px,calc(100% - 28px)); margin:auto; padding:34px 0 70px }}
+.shell {{ width:min(1180px,calc(100% - 28px)); margin:auto; padding:34px 0 70px }}
 header {{ display:flex; align-items:center; gap:18px; margin-bottom:20px }}
 .brand-logo {{ width:112px; height:112px; object-fit:contain; flex:0 0 auto; filter:drop-shadow(0 6px 14px rgba(82,32,33,.14)) }}
 .eyebrow {{ color:var(--accent); font-size:12px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; margin-bottom:3px }}
@@ -29,6 +29,9 @@ h1 {{ margin-bottom:0; font-size:clamp(28px,4vw,40px); letter-spacing:-.04em }}
 .site-nav a.active {{ background:var(--accent); color:#fff; border-color:var(--accent) }}
 .hero {{ background:var(--panel); border:1px solid var(--line); border-radius:22px; padding:24px; box-shadow:0 8px 28px rgba(73,43,38,.07); margin-bottom:18px }}
 .hero-row {{ display:flex; justify-content:space-between; gap:24px; align-items:center }}
+.bot-heading {{ display:flex; align-items:center; gap:16px }}
+.bot-avatar {{ width:74px; height:74px; border-radius:18px; object-fit:cover; border:1px solid var(--line); background:#fff; display:none }}
+.bot-avatar.visible {{ display:block }}
 .hero p {{ margin:8px 0 0; color:var(--muted); max-width:680px }}
 .invite {{ display:inline-block; flex:0 0 auto; text-decoration:none; color:#fff; background:var(--accent); padding:12px 17px; border-radius:11px; font-weight:800 }}
 .invite:hover {{ background:var(--accent-dark) }}
@@ -40,6 +43,11 @@ h1 {{ margin-bottom:0; font-size:clamp(28px,4vw,40px); letter-spacing:-.04em }}
 .status-dot {{ display:inline-block; width:10px; height:10px; border-radius:50%; background:#a8a2a0; margin-right:7px }}
 .status-dot.online {{ background:var(--green); box-shadow:0 0 0 5px rgba(47,125,74,.1) }}
 .grid {{ display:grid; grid-template-columns:1.35fr .65fr; gap:18px }}
+.commands {{ margin-top:18px }}
+.command-list {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px }}
+.command {{ background:#f8f1ee; border:1px solid #eadfda; border-radius:12px; padding:13px 14px }}
+.command code {{ display:block; color:var(--accent-dark); font-weight:800; margin-bottom:4px; font-size:14px }}
+.command span {{ color:var(--muted) }}
 .panel {{ background:var(--panel); border:1px solid var(--line); border-radius:18px; padding:20px }}
 .panel h2 {{ font-size:19px; margin-bottom:12px }}
 .features {{ display:grid; gap:9px }}
@@ -58,6 +66,7 @@ footer {{ margin-top:20px; text-align:center; color:var(--muted); font-size:12px
   .invite {{ margin-top:16px }}
   .stats {{ grid-template-columns:1fr 1fr }}
   .grid {{ grid-template-columns:1fr }}
+  .command-list {{ grid-template-columns:1fr }}
 }}
 @media(max-width:460px) {{
   .stats {{ grid-template-columns:1fr }}
@@ -72,14 +81,18 @@ footer {{ margin-top:20px; text-align:center; color:var(--muted); font-size:12px
 </header>
 <nav class="site-nav" aria-label="PokÈvent">
   <a href="/">Events</a>
+  <a href="/search">Search</a>
   <a href="/bot" class="active">Bot Info</a>
 </nav>
 
 <section class="hero">
   <div class="hero-row">
-    <div>
-      <h2>PokÈvent Discord Bot</h2>
-      <p>Event discovery, announcements, rolling League summaries, discussion threads, lifecycle updates and optional community welcomes for local Pokémon servers.</p>
+    <div class="bot-heading">
+      <img id="botAvatar" class="bot-avatar" alt="PokÈvent Discord bot avatar">
+      <div>
+        <h2>PokÈvent Discord Bot</h2>
+        <p>Event discovery, announcements, rolling League summaries, discussion threads, lifecycle updates and optional community welcomes for local Pokémon servers.</p>
+      </div>
     </div>
     <a id="inviteButton" class="invite disabled" href="#" rel="noopener">Add PokÈvent to your server</a>
   </div>
@@ -90,6 +103,16 @@ footer {{ margin-top:20px; text-align:center; color:var(--muted); font-size:12px
   <div class="stat"><small>Uptime</small><strong id="uptime">—</strong></div>
   <div class="stat"><small>Discord servers</small><strong id="servers">—</strong></div>
   <div class="stat"><small>Version</small><strong id="version">—</strong></div>
+</section>
+
+<section class="panel commands">
+  <h2>Discord commands</h2>
+  <div class="command-list">
+    <div class="command"><code>/events [league]</code><span>Browse upcoming events for the server's default League or another configured League.</span></div>
+    <div class="command"><code>/calendar</code><span>Get a private link to the public PokÈvent calendar.</span></div>
+    <div class="command"><code>/pokevent setup</code><span>Administrator dashboard for Leagues, channels, event types, notifications, welcomes, posting tools and manual event checks.</span></div>
+    <div class="command"><code>/pokevent status</code><span>Show the current PokÈvent configuration and routing status for the Discord server.</span></div>
+  </div>
 </section>
 
 <section class="grid">
@@ -139,6 +162,14 @@ async function refreshBotInfo() {{
     document.getElementById("botName").textContent=data.bot_name||"—";
     document.getElementById("leagueCount").textContent=data.configured_league_count==null?"—":data.configured_league_count;
     document.getElementById("heartbeat").textContent=data.last_seen_at?new Date(data.last_seen_at).toLocaleString():"—";
+    var avatar=document.getElementById("botAvatar");
+    if(data.avatar_url) {{
+      avatar.src=data.avatar_url;
+      avatar.classList.add("visible");
+    }} else {{
+      avatar.removeAttribute("src");
+      avatar.classList.remove("visible");
+    }}
     var invite=document.getElementById("inviteButton");
     if(data.invite_url) {{
       invite.href=data.invite_url;

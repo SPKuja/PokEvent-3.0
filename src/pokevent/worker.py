@@ -4,7 +4,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime
 
-from .catalogue import upsert_snapshots
+from .catalogue import CatalogueSyncResult, upsert_snapshots
 from .config import get_settings
 from .db import SessionFactory
 from .domain import EventSearch, EventSnapshot
@@ -38,7 +38,7 @@ def apply_league_registry(snapshot: EventSnapshot) -> EventSnapshot:
     return snapshot.model_copy(update={"organisation_name": configured_name})
 
 
-async def sync_once() -> None:
+async def sync_once() -> CatalogueSyncResult:
     async with SessionFactory() as session:
         monitored_ids = await all_monitored_league_ids(
             session,
@@ -72,6 +72,7 @@ async def sync_once() -> None:
         result.unchanged,
         baselined,
     )
+    return result
 
 
 async def run_worker() -> None:

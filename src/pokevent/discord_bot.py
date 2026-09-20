@@ -46,6 +46,7 @@ from .models import (
     PublishedMessage,
     Route,
 )
+from .worker import sync_once
 
 settings = get_settings()
 log = logging.getLogger("pokevent.discord")
@@ -134,6 +135,15 @@ class PokEventBot(commands.Bot):
     async def on_guild_remove(self, guild: discord.Guild) -> None:
         self._synced_guild_ids.discard(guild.id)
         await _update_bot_runtime()
+
+    async def on_user_update(
+        self,
+        before: discord.User,
+        after: discord.User,
+    ) -> None:
+        del before
+        if self.user is not None and after.id == self.user.id:
+            await _update_bot_runtime()
 
     async def on_member_join(self, member: discord.Member) -> None:
         if not settings.enable_member_welcomes or member.bot:
@@ -870,6 +880,7 @@ async def _update_bot_runtime() -> None:
                 id="discord",
                 bot_user_id=str(bot.user.id),
                 bot_name=str(bot.user),
+                avatar_url=str(bot.user.display_avatar.url),
                 guild_count=len(bot.guilds),
                 started_at=bot.started_at,
                 last_seen_at=now,
@@ -878,6 +889,7 @@ async def _update_bot_runtime() -> None:
         else:
             runtime.bot_user_id = str(bot.user.id)
             runtime.bot_name = str(bot.user)
+            runtime.avatar_url = str(bot.user.display_avatar.url)
             runtime.guild_count = len(bot.guilds)
             runtime.started_at = bot.started_at
             runtime.last_seen_at = now
@@ -1530,8 +1542,7 @@ async def _publish_route(route: Route) -> None:
         await session.commit()
 
 
-@tasks.loop(minutes=1)
-async def publish_event_routes() -> None:
+async def publish_event_routes_once() -> None:
     async with SessionFactory() as session:
         routes = list(
             (
@@ -1546,6 +1557,11 @@ async def publish_event_routes() -> None:
 
     for route in routes:
         await _publish_route(route)
+
+
+@tasks.loop(minutes=1)
+async def publish_event_routes() -> None:
+    await publish_event_routes_once()
 
 
 @tasks.loop(minutes=15)
@@ -1913,6 +1929,15 @@ class SetupDashboardView(discord.ui.View):
         self.add_item(SetupDashboardButton(self, "welcomes", "Welcomes", row=1))
         self.add_item(SetupDashboardButton(self, "refresh", "Refresh Summary", row=1))
         self.add_item(SetupDashboardButton(self, "close", "Close", row=1))
+        self.add_item(
+            SetupDashboardButton(
+                self,
+                "check",
+                "Check New Events",
+                discord.ButtonStyle.primary,
+                row=2,
+            )
+        )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.invoker_id:
@@ -2044,6 +2069,40 @@ class SetupDashboardView(discord.ui.View):
             await interaction.response.edit_message(
                 content=view.content(),
                 view=view,
+            )
+            return
+
+        if action == "check":
+            await interaction.response.defer()
+            try:
+                result = await sync_once()
+                await publish_event_routes_once()
+                await refresh_guild_summary_messages(self.guild_id)
+            except Exception:
+                log.exception(
+                    "manual event check failed guild=%s",
+                    self.guild_id,
+                )
+                await interaction.edit_original_response(
+                    content=await _setup_dashboard_content(
+                        self.guild_id,
+                        notice="Event check failed. The cached catalogue was left intact.",
+                    ),
+                    view=self,
+                )
+                return
+
+            await interaction.edit_original_response(
+                content=await _setup_dashboard_content(
+                    self.guild_id,
+                    notice=(
+                        "Event check complete · "
+                        f"{result.created} new · "
+                        f"{result.updated} updated · "
+                        f"{result.unchanged} unchanged"
+                    ),
+                ),
+                view=self,
             )
             return
 

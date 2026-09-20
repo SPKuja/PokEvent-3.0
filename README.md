@@ -125,3 +125,14 @@ private default network.
 
 - `GET /bot` shows live PokÈvent Discord bot information, uptime, server count and invite link.
 - `GET /api/bot` returns the same bot runtime information as JSON.
+
+
+## Public web pages
+
+- `GET /` — configured-League calendar and list view.
+- `GET /search` — search the current PokÈvent discovery catalogue by town, postcode, venue or address.
+- `GET /bot` — live Discord bot status, uptime, server count, invite link and command reference.
+- `GET /api/search?q=Swindon` — JSON location search for upcoming active events.
+
+
+The `/pokevent setup` admin dashboard includes **Check New Events**, which runs an immediate source sync, publishes any genuinely new routed events and refreshes the server's rolling summaries.
