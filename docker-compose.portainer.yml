@@ -1,20 +1,13 @@
 x-pokevent-environment: &pokevent-environment
   POKEVENT_DISCORD_TOKEN: ${POKEVENT_DISCORD_TOKEN}
   POKEVENT_PUBLIC_BASE_URL: ${POKEVENT_PUBLIC_BASE_URL:-http://localhost:8080}
-  POKEVENT_COMMUNITY_NAME: ${POKEVENT_COMMUNITY_NAME:-Pokémon League Swindon}
-  POKEVENT_BRAND_LOGO_URL: ${POKEVENT_BRAND_LOGO_URL:-https://pokemonleagueswindon.co.uk/images/pokevent/PokEvent3.0.png}
-  POKEVENT_LEAGUES: '${POKEVENT_LEAGUES:-{"2012924":"Pokémon League Swindon","5683200":"Bath TCG","6234115":"Firestorm Games Swindon","6244670":"Crazy Collectables","6238080":"Atomic Cards"}}'
-  POKEVENT_LEAGUE_LOGOS: '${POKEVENT_LEAGUE_LOGOS:-{"2012924":"https://pokemonleagueswindon.co.uk/images/pokevent/pokemon_league_swindon.png","5683200":"https://pokemonleagueswindon.co.uk/images/pokevent/bath_tcg.png","6234115":"https://pokemonleagueswindon.co.uk/images/pokevent/firestorm.png","6244670":"https://pokemonleagueswindon.co.uk/images/pokevent/crazy_collectables.jpg","6238080":"https://pokemonleagueswindon.co.uk/images/pokevent/atomic_cards.png"}}'
-  POKEVENT_HOME_NAME: ${POKEVENT_HOME_NAME:-Swindon}
-  POKEVENT_HOME_LATITUDE: ${POKEVENT_HOME_LATITUDE:-51.5615}
-  POKEVENT_HOME_LONGITUDE: ${POKEVENT_HOME_LONGITUDE:--1.7855}
-  POKEVENT_DEFAULT_RADIUS_MILES: ${POKEVENT_DEFAULT_RADIUS_MILES:-30}
-  POKEVENT_COUNTRY_CODE: ${POKEVENT_COUNTRY_CODE:-GB}
-  POKEVENT_LOCAL_TIMEZONE: ${POKEVENT_LOCAL_TIMEZONE:-Europe/London}
-  POKEVENT_EVENT_HORIZON_DAYS: ${POKEVENT_EVENT_HORIZON_DAYS:-90}
-  POKEVENT_EVENT_SOURCE: ${POKEVENT_EVENT_SOURCE:-pokedata}
-  POKEVENT_SYNC_INTERVAL_MINUTES: ${POKEVENT_SYNC_INTERVAL_MINUTES:-180}
-  POKEVENT_ENABLE_MEMBER_WELCOMES: ${POKEVENT_ENABLE_MEMBER_WELCOMES:-false}
+  POKEVENT_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-pokevent}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-pokevent}
+
+x-pokevent-app: &pokevent-app
+  image: ghcr.io/spkuja/pokevent-3.0:latest
+  pull_policy: always
+  environment:
+    <<: *pokevent-environment
 
 services:
   db:
@@ -35,23 +28,17 @@ services:
       retries: 5
 
   migrate:
-    build: .
+    <<: *pokevent-app
     command: alembic upgrade head
     restart: "no"
-    environment:
-      <<: *pokevent-environment
-      POKEVENT_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-pokevent}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-pokevent}
     depends_on:
       db:
         condition: service_healthy
 
   web:
-    build: .
+    <<: *pokevent-app
     command: pokevent-web
     restart: unless-stopped
-    environment:
-      <<: *pokevent-environment
-      POKEVENT_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-pokevent}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-pokevent}
     ports:
       - "${POKEVENT_WEB_PORT:-8080}:8080"
     networks:
@@ -62,23 +49,17 @@ services:
         condition: service_completed_successfully
 
   bot:
-    build: .
+    <<: *pokevent-app
     command: pokevent-bot
     restart: unless-stopped
-    environment:
-      <<: *pokevent-environment
-      POKEVENT_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-pokevent}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-pokevent}
     depends_on:
       migrate:
         condition: service_completed_successfully
 
   worker:
-    build: .
+    <<: *pokevent-app
     command: pokevent-worker
     restart: unless-stopped
-    environment:
-      <<: *pokevent-environment
-      POKEVENT_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-pokevent}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-pokevent}
     depends_on:
       migrate:
         condition: service_completed_successfully
