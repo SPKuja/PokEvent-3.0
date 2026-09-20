@@ -19,16 +19,18 @@ COMMUNITY_GAMES = {"tcg", "vgc", "go", "other"}
 def parse_local_datetime(value: str, timezone_name: str) -> datetime:
     cleaned = " ".join(value.strip().split())
     try:
-        local = datetime.strptime(cleaned, "%Y-%m-%d %H:%M")
-    except ValueError as exc:
-        raise ValueError("Use date/time format YYYY-MM-DD HH:MM.") from exc
-
-    try:
         timezone = ZoneInfo(timezone_name)
     except Exception as exc:
         raise ValueError("PokÈvent's local timezone is not configured correctly.") from exc
 
-    return local.replace(tzinfo=timezone).astimezone(UTC)
+    try:
+        local = datetime.strptime(cleaned, "%Y-%m-%d %H:%M").replace(
+            tzinfo=timezone
+        )
+    except ValueError as exc:
+        raise ValueError("Use date/time format YYYY-MM-DD HH:MM.") from exc
+
+    return local.astimezone(UTC)
 
 
 def normalise_game(value: str) -> str:
