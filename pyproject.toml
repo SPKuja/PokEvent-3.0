@@ -16,6 +16,7 @@ dependencies = [
   "fastapi>=0.116,<1",
   "httpx>=0.28,<1",
   "icalendar>=6.3,<7",
+  "pillow>=11,<13",
   "pydantic-settings>=2.10,<3",
   "sqlalchemy[asyncio]>=2.0.43,<3",
   "uvicorn[standard]>=0.35,<1",
@@ -27,6 +28,7 @@ dev = ["pytest>=8.4,<9", "pytest-asyncio>=1.1,<2", "ruff>=0.12,<1"]
 [project.scripts]
 pokevent-web = "pokevent.web:main"
 pokevent-bot = "pokevent.discord_bot:main"
+pokevent-worker = "pokevent.worker:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pokevent"]

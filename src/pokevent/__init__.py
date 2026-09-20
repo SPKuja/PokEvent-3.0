@@ -1,3 +1,3 @@
-"""PokEvent 3.0."""
+"""PokÈvent 3.0."""
 
 __version__ = "3.0.0a1"
