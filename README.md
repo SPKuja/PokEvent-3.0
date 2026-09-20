@@ -114,6 +114,7 @@ Recommended variables:
   configured/default League network. This remains a Portainer environment
   variable and can be changed without modifying the application code;
 - `POKEVENT_LEAGUE_LOGOS` — optional JSON map of League IDs to public logo URLs;
+- `POKEVENT_BRAND_LOGO_URL` — public URL for the PokÈvent logo used by the calendar header;
 - `POKEVENT_PUBLIC_BASE_URL` — public HTTPS URL once reverse proxying is set up.
 
 The web service joins the external `NeuralNet` Docker network for reverse-proxy

@@ -27,16 +27,19 @@ async def health() -> dict[str, str]:
     return {"status": "ok", "version": __version__}
 
 
-def _public_logo_url(league_id: str | None) -> str | None:
-    if not league_id:
-        return None
-    value = settings.league_logos.get(league_id)
+def _safe_public_url(value: str | None) -> str | None:
     if not value:
         return None
     parsed = urlparse(value)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return None
     return value
+
+
+def _public_logo_url(league_id: str | None) -> str | None:
+    if not league_id:
+        return None
+    return _safe_public_url(settings.league_logos.get(league_id))
 
 
 def _public_event_payload(
@@ -77,7 +80,7 @@ async def public_calendar() -> HTMLResponse:
     return HTMLResponse(
         public_index_html(
             community_name=settings.community_name,
-            home_name=settings.home_name,
+            brand_logo_url=_safe_public_url(settings.brand_logo_url) or "",
         )
     )
 

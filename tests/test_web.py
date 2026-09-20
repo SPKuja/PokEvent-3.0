@@ -2,7 +2,12 @@ import inspect
 from datetime import UTC, datetime
 
 from pokevent import web
-from pokevent.config import DEFAULT_LEAGUE_LOGOS, DEFAULT_LEAGUES, Settings
+from pokevent.config import (
+    DEFAULT_BRAND_LOGO_URL,
+    DEFAULT_LEAGUE_LOGOS,
+    DEFAULT_LEAGUES,
+    Settings,
+)
 from pokevent.models import Event
 from pokevent.public_site import public_index_html
 
@@ -26,11 +31,13 @@ def _event() -> Event:
 def test_public_site_contains_calendar_and_list_controls() -> None:
     html = public_index_html(
         community_name="Pokémon League Swindon",
-        home_name="Swindon",
+        brand_logo_url=DEFAULT_BRAND_LOGO_URL,
     )
 
     assert "<h1>PokÈvent</h1>" in html
-    assert "configured Play! Pokémon Leagues in and around Swindon" in html
+    assert 'class="brand-logo"' in html
+    assert DEFAULT_BRAND_LOGO_URL in html
+    assert "Upcoming events from our configured" not in html
     assert 'id="calendarMode"' in html
     assert 'id="listMode"' in html
     assert 'id="leagueFilter"' in html
@@ -102,3 +109,19 @@ def test_portainer_league_environment_can_override_defaults(monkeypatch) -> None
     configured = Settings(_env_file=None)
 
     assert configured.leagues == {"9999999": "Example League"}
+
+
+
+def test_brand_logo_can_be_overridden_from_environment(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "POKEVENT_BRAND_LOGO_URL",
+        "https://example.com/custom-brand.png",
+    )
+
+    configured = Settings(_env_file=None)
+
+    assert configured.brand_logo_url == "https://example.com/custom-brand.png"
+
+
+def test_safe_public_url_rejects_non_http_brand_url() -> None:
+    assert web._safe_public_url("javascript:alert(1)") is None

@@ -3,9 +3,9 @@ from __future__ import annotations
 import html
 
 
-def public_index_html(*, community_name: str, home_name: str) -> str:
+def public_index_html(*, community_name: str, brand_logo_url: str) -> str:
     community = html.escape(community_name)
-    home = html.escape(home_name)
+    brand_logo = html.escape(brand_logo_url, quote=True)
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -20,13 +20,12 @@ body {{ margin:0; background:linear-gradient(180deg,#ffffff 0,#f8f4f1 210px,var(
 button,select {{ font:inherit }}
 a {{ color:inherit }}
 .shell {{ width:min(1180px,calc(100% - 28px)); margin:auto; padding:34px 0 70px }}
-header {{ display:flex; align-items:center; gap:14px; margin-bottom:28px }}
-.brandmark {{ width:52px; height:52px; border-radius:50%; display:grid; place-items:center; font-weight:900; font-size:21px; color:#fff; background:var(--accent); border:4px solid #fff; box-shadow:0 3px 14px rgba(82,32,33,.18) }}
+header {{ display:flex; align-items:center; gap:18px; margin-bottom:28px }}
+.brand-logo {{ width:112px; height:112px; object-fit:contain; flex:0 0 auto; filter:drop-shadow(0 6px 14px rgba(82,32,33,.14)) }}
 h1,h2,h3,p {{ margin-top:0 }}
 h1 {{ margin-bottom:2px; font-size:clamp(28px,4vw,40px); letter-spacing:-.04em }}
-.subtitle,.meta {{ color:var(--muted) }}
+.meta {{ color:var(--muted) }}
 .eyebrow {{ color:var(--accent); font-size:12px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; margin-bottom:3px }}
-.subtitle {{ margin:0 }}
 .controls {{ display:grid; grid-template-columns:auto 1fr; gap:12px; background:rgba(255,253,251,.96); border:1px solid var(--line); border-radius:18px; padding:12px; margin-bottom:22px; box-shadow:0 8px 28px rgba(73,43,38,.07) }}
 .switcher {{ display:flex; background:#f2e9e5; padding:4px; border-radius:13px }}
 .switcher button,.ghost,.primary {{ border:0; border-radius:10px; padding:10px 14px; cursor:pointer }}
@@ -70,6 +69,8 @@ dialog::backdrop {{ background:rgba(54,32,30,.55) }}
 .cancelled-banner {{ padding:9px 12px; background:rgba(239,83,80,.15); border:1px solid rgba(239,83,80,.4); border-radius:10px; margin-bottom:14px }}
 [hidden] {{ display:none!important }}
 @media(max-width:760px) {{
+  header {{ align-items:flex-start }}
+  .brand-logo {{ width:84px; height:84px }}
   .controls {{ grid-template-columns:1fr }}
   .filters {{ grid-template-columns:1fr }}
   .calendar {{ display:grid; grid-template-columns:1fr; border:0; background:transparent }}
@@ -84,7 +85,7 @@ dialog::backdrop {{ background:rgba(54,32,30,.55) }}
 </head>
 <body>
 <main class="shell">
-<header><div class="brandmark">P</div><div><div class="eyebrow">Play • Trade • Battle</div><h1>PokÈvent</h1><p class="subtitle">Upcoming events from our configured Play! Pokémon Leagues in and around {home}.</p></div></header>
+<header><img class="brand-logo" src="{brand_logo}" alt="PokÈvent 3.0"><div><div class="eyebrow">Play • Trade • Battle</div><h1>PokÈvent</h1></div></header>
 <section class="controls">
   <div class="switcher"><button id="calendarMode" class="active">Calendar</button><button id="listMode">List</button></div>
   <div class="filters">

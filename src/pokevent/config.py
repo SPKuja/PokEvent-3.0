@@ -11,6 +11,10 @@ DEFAULT_LEAGUES = {
     "6238080": "Atomic Cards",
 }
 
+DEFAULT_BRAND_LOGO_URL = (
+    "https://pokemonleagueswindon.co.uk/images/pokevent/PokEvent3.0.png"
+)
+
 DEFAULT_LEAGUE_LOGOS = {
     "2012924": (
         "https://pokemonleagueswindon.co.uk/images/pokevent/"
@@ -38,6 +42,7 @@ class Settings(BaseSettings):
     public_base_url: str = "http://localhost:8080"
 
     community_name: str = "Pokémon League Swindon"
+    brand_logo_url: str = DEFAULT_BRAND_LOGO_URL
 
     # Stable Play! Pokémon League IDs mapped to human-friendly names.
     # Discord routing and organisation identity use the ID; the name is display only.
