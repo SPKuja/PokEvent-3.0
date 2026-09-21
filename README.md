@@ -117,11 +117,12 @@ Recommended variables:
 - `POKEVENT_PUBLIC_BASE_URL` — public HTTPS URL once reverse proxying is set up;
 - `POKEVENT_LEAGUES` — JSON map of the default League IDs and friendly names
   monitored by PokÈvent. Keep this in Portainer so new default Leagues can be
-  added without changing or rebuilding the application;
-- `POKEVENT_ENABLE_MEMBER_WELCOMES` — enables Discord member-join events for
-  configured welcome messages. The Portainer stack defaults this to `true`.
-  The bot must also have **Server Members Intent** enabled in the Discord
-  Developer Portal.
+  added without changing or rebuilding the application.
+
+Member welcomes always subscribe to Discord member-join events. The bot must
+have **Server Members Intent** enabled in the Discord Developer Portal; each
+server can then enable or disable welcome posts independently in
+`/pokevent setup`.
 
 Most other PokÈvent settings already have application defaults and only need to
 be added to Portainer when overriding those defaults.
