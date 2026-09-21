@@ -67,7 +67,7 @@ class PokEventBot(commands.Bot):
     def __init__(self) -> None:
         intents = discord.Intents.none()
         intents.guilds = True
-        intents.members = settings.enable_member_welcomes
+        intents.members = True
         super().__init__(command_prefix=commands.when_mentioned, intents=intents)
         self._synced_guild_ids: set[int] = set()
         self._global_commands_removed = False
@@ -158,7 +158,7 @@ class PokEventBot(commands.Bot):
             await _update_bot_runtime()
 
     async def on_member_join(self, member: discord.Member) -> None:
-        if not settings.enable_member_welcomes or member.bot:
+        if member.bot:
             return
         try:
             await _send_member_welcome(member)
@@ -1858,8 +1858,6 @@ async def _setup_dashboard_content(
         "text": "Text",
         "image": "Image banner",
     }.get(welcome_mode, "Off")
-    if welcome_mode != "off" and not settings.enable_member_welcomes:
-        welcome_label += " ⚠️ listener disabled"
     league_names = ", ".join(league.name for league in leagues[:6]) or "None"
     if len(leagues) > 6:
         league_names += f" +{len(leagues) - 6} more"
@@ -2607,17 +2605,6 @@ class WelcomeManagerView(discord.ui.View):
             "",
             "Available message tokens: {member}, {display_name}, {server}.",
         ]
-        if self.mode != "off" and not settings.enable_member_welcomes:
-            lines.extend(
-                [
-                    "",
-                    "⚠️ **Member join listener is disabled on this deployment.**",
-                    (
-                        "-# Set POKEVENT_ENABLE_MEMBER_WELCOMES=true, enable "
-                        "Discord's Server Members Intent, then restart the bot."
-                    ),
-                ]
-            )
         if self.mode == "image":
             lines.append(
                 "-# Image banners use the member avatar and server icon when available."
