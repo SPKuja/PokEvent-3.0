@@ -2612,8 +2612,10 @@ class WelcomeManagerView(discord.ui.View):
                 [
                     "",
                     "⚠️ **Member join listener is disabled on this deployment.**",
-                    "-# Set POKEVENT_ENABLE_MEMBER_WELCOMES=true, enable Discord's "
-                    "Server Members Intent, then restart the bot.",
+                    (
+                        "-# Set POKEVENT_ENABLE_MEMBER_WELCOMES=true, enable "
+                        "Discord's Server Members Intent, then restart the bot."
+                    ),
                 ]
             )
         if self.mode == "image":
