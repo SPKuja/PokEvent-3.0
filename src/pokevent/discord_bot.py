@@ -1858,6 +1858,8 @@ async def _setup_dashboard_content(
         "text": "Text",
         "image": "Image banner",
     }.get(welcome_mode, "Off")
+    if welcome_mode != "off" and not settings.enable_member_welcomes:
+        welcome_label += " ⚠️ listener disabled"
     league_names = ", ".join(league.name for league in leagues[:6]) or "None"
     if len(leagues) > 6:
         league_names += f" +{len(leagues) - 6} more"
@@ -2605,6 +2607,15 @@ class WelcomeManagerView(discord.ui.View):
             "",
             "Available message tokens: {member}, {display_name}, {server}.",
         ]
+        if self.mode != "off" and not settings.enable_member_welcomes:
+            lines.extend(
+                [
+                    "",
+                    "⚠️ **Member join listener is disabled on this deployment.**",
+                    "-# Set POKEVENT_ENABLE_MEMBER_WELCOMES=true, enable Discord's "
+                    "Server Members Intent, then restart the bot.",
+                ]
+            )
         if self.mode == "image":
             lines.append(
                 "-# Image banners use the member avatar and server icon when available."
