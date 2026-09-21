@@ -1,6 +1,7 @@
 x-pokevent-environment: &pokevent-environment
   POKEVENT_DISCORD_TOKEN: ${POKEVENT_DISCORD_TOKEN}
   POKEVENT_PUBLIC_BASE_URL: ${POKEVENT_PUBLIC_BASE_URL:-http://localhost:8080}
+  POKEVENT_ENABLE_MEMBER_WELCOMES: ${POKEVENT_ENABLE_MEMBER_WELCOMES:-true}
   POKEVENT_LEAGUES: '${POKEVENT_LEAGUES:-{"2012924":"Pokémon League Swindon","5683200":"Bath TCG","6234115":"Firestorm Games Swindon","6244670":"Crazy Collectables","6238080":"Atomic Cards"}}'
   POKEVENT_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-pokevent}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-pokevent}
 
