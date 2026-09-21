@@ -9,7 +9,6 @@ from pokevent.discord_bot import (
     EVENTS_PAGE_SIZE,
     POKEMON_WELCOME_MESSAGES,
     SetupDashboardView,
-    WelcomeManagerView,
     _event_announcement_mentions,
     _event_cleanup_at,
     _event_embed,
@@ -361,21 +360,8 @@ def test_pokemon_welcome_pool_has_variety() -> None:
     assert len(set(POKEMON_WELCOME_MESSAGES)) == len(POKEMON_WELCOME_MESSAGES)
 
 
-def test_welcome_manager_warns_when_member_listener_is_disabled(monkeypatch) -> None:
-    from pokevent import discord_bot
-
-    monkeypatch.setattr(discord_bot.settings, "enable_member_welcomes", False)
-
-    view = WelcomeManagerView(
-        invoker_id=1,
-        guild_id="guild-1",
-        mode="text",
-        channel_id="123",
-        message=None,
-    )
-
-    assert "Member join listener is disabled" in view.content()
-    assert "POKEVENT_ENABLE_MEMBER_WELCOMES=true" in view.content()
+def test_bot_always_subscribes_to_member_join_events() -> None:
+    assert bot.intents.members is True
 
 
 
@@ -408,17 +394,6 @@ def test_public_calendar_url_rejects_invalid_base_url(monkeypatch) -> None:
 
     assert _public_calendar_url() is None
 
-
-
-def test_portainer_enables_member_welcomes_by_default() -> None:
-    from pathlib import Path
-
-    compose = Path("docker-compose.portainer.yml").read_text(encoding="utf-8")
-
-    assert (
-        "POKEVENT_ENABLE_MEMBER_WELCOMES: "
-        "${POKEVENT_ENABLE_MEMBER_WELCOMES:-true}"
-    ) in compose
 
 
 def test_admin_dashboard_has_manual_event_check() -> None:
