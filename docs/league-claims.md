@@ -72,8 +72,8 @@ Once approved, **all Discord administrators in the claimed server** can use
 
 Choose one of the upcoming events from that *one verified League* and:
 mark it cancelled, mark it active, correct its title/time/venue, or restore
-Pokédata's original values. Time entry uses `YYYY-MM-DD HH:MM` in UK
-local time. Cancelling updates affected Discord announcements, including
+Pokédata's original values. Time entry and display use **DD/MM/YYYY HH:MM** (for example,
+`18/10/2026 11:00`) in UK local time. Cancelling updates affected Discord announcements, including
 other servers that merely follow the League.
 
 Every write checks the real event's stored League ID and the currently
