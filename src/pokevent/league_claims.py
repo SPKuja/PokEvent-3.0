@@ -14,6 +14,7 @@ from .catalogue import event_content_hash
 from .domain import EventSnapshot, EventStatus
 from .models import (
     Event,
+    EventEditAudit,
     GuildConfig,
     LeagueClaim,
     ManualEventOverride,
@@ -24,6 +25,10 @@ from .models import (
 ACTIVE_CLAIM_STATES = {"invited", "pending", "approved"}
 ALLOWED_FIELDS = {"status", "title", "starts_at", "venue_name", "ends_at"}
 EDITABLE_FIELDS = ALLOWED_FIELDS - {"ends_at"}
+
+
+def _audit_value(value: object) -> object:
+    return value.isoformat() if isinstance(value, datetime) else value
 
 
 async def approved_for_league(
@@ -180,6 +185,10 @@ async def change_event(
     if not changes or set(changes) - EDITABLE_FIELDS:
         raise ValueError("No supported changes were supplied.")
     event = await owned_event(session, guild_id, event_id)
+    before = {
+        name: _audit_value(getattr(event, name))
+        for name in ALLOWED_FIELDS
+    }
     if "status" in changes and changes["status"] not in ("active", "cancelled"):
         raise ValueError("Status must be active or cancelled.")
     for name in ("title", "venue_name"):
@@ -250,17 +259,30 @@ async def change_event(
         registration_url=event.registration_url,
     )
     event.content_hash = event_content_hash(snapshot)
+    session.add(EventEditAudit(
+        event_id=event.id, guild_id=guild_id,
+        league_id=event.upstream_organisation_id,
+        user_id=user_id, action="edit", before=before,
+        after={name: _audit_value(getattr(event, name)) for name in ALLOWED_FIELDS},
+    ))
     await session.flush()
     return event
 
 
 async def remove_override(
-    session: AsyncSession, guild_id: str, event_id: str,
+    session: AsyncSession, guild_id: str, event_id: str, user_id: str,
 ) -> bool:
-    await owned_event(session, guild_id, event_id)
+    event = await owned_event(session, guild_id, event_id)
     record = await session.get(ManualEventOverride, event_id)
     if record is None:
         return False
+    session.add(EventEditAudit(
+        event_id=event_id, guild_id=guild_id,
+        league_id=event.upstream_organisation_id,
+        user_id=user_id, action="restore_pokedata",
+        before={name: _audit_value(getattr(record, name)) for name in ALLOWED_FIELDS},
+        after=None,
+    ))
     await session.delete(record)
     await session.flush()
     return True
