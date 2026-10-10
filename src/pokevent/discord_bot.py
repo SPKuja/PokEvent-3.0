@@ -4335,6 +4335,8 @@ async def league_default(interaction: discord.Interaction, league: str) -> None:
         await _send_error(interaction, str(exc))
         return
 
+    if settings.owner_user_id:
+        asyncio.create_task(_send_existing_claim_invitations({interaction.guild_id}))
     await refresh_guild_summary_messages(str(interaction.guild_id))
     await interaction.response.send_message(
         f"**{chosen.name}** ({chosen.league_id}) is now this server's default League.",
