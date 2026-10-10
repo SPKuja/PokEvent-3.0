@@ -1938,15 +1938,8 @@ async def _setup_dashboard_content(
     if len(leagues) > 6:
         league_names += f" +{len(leagues) - 6} more"
 
-    async with SessionFactory() as session:
-        ownership = await session.get(LeagueClaim, guild_id)
-    ownership_label = (
-        f"{ownership.status.capitalize()} · League {ownership.league_id}"
-        if ownership else "Unclaimed · /pokevent claim for the server owner"
-    )
     lines = [
         "## ⚙️ PokÈvent Admin",
-        f"**League ownership:** {ownership_label}",
         f"**Status:** {status}",
         f"**Default League:** {default_name}",
         f"**Default channel:** {default_channel}",
@@ -2085,6 +2078,15 @@ class SetupDashboardView(discord.ui.View):
         self.add_item(SetupDashboardButton(self, "refresh", "Refresh Summary", row=1))
         self.add_item(SetupDashboardButton(self, "close", "Close", row=1))
         self.add_item(SetupDashboardButton(self, "eventmanage", "Manage Events", row=2))
+        if settings.owner_user_id == invoker_id:
+            self.add_item(SetupDashboardButton(
+                self, "claim_reviews", "League Claims", row=2,
+            ))
+        guild = bot.get_guild(int(guild_id))
+        if guild is not None and guild.owner_id == invoker_id:
+            self.add_item(SetupDashboardButton(
+                self, "claim_owner", "Claim My League", row=2,
+            ))
         self.add_item(
             SetupDashboardButton(
                 self,
@@ -2109,6 +2111,15 @@ class SetupDashboardView(discord.ui.View):
         interaction: discord.Interaction,
         action: str,
     ) -> None:
+        if action == "claim_reviews":
+            if not _is_pokevent_owner(interaction):
+                await _send_error(interaction, "Only the PokEvent owner can review claims.")
+                return
+            await _open_owner_claims(interaction, self.guild_id)
+            return
+        if action == "claim_owner":
+            await _open_guild_claims(interaction, self.guild_id)
+            return
         if action == "eventmanage":
             await _open_league_event_manager(interaction, self.guild_id)
             return
@@ -4943,15 +4954,6 @@ class LeagueEventManagerView(discord.ui.View):
             )
 
 
-@pokevent.command(
-    name="manageevents", description="Manage events for this server's verified League.",
-)
-@_admin_only
-async def pokevent_manageevents(interaction: discord.Interaction) -> None:
-    assert interaction.guild_id is not None
-    await _open_league_event_manager(interaction, str(interaction.guild_id))
-
-
 # ===== Discord server ownership claims =====
 
 def _is_pokevent_owner(interaction: discord.Interaction) -> bool:
@@ -4982,7 +4984,8 @@ def _claim_invitation_text(guild: discord.Guild, league_name: str) -> str:
         "your request before editing is enabled. A League can be verified "
         "to only one server, and each server can verify only one League.\n\n"
         "Select **No thanks** to carry on receiving events without editing "
-        "access. You can still request a claim later with **/pokevent claim**."
+        "access. You can request a claim later through **/pokevent setup** "
+        "→ **Claim My League**."
     )
 
 
@@ -5126,8 +5129,8 @@ async def _notify_claim_reviewer(guild: discord.Guild, league_id: str) -> None:
             f"**Server owner:** <@{guild.owner_id}> ({guild.owner_id})\n"
             f"**League:** {settings.leagues.get(league_id, league_id)} ({league_id})\n\n"
             "Check the League and server owner independently before approving. "
-            "Use **/pokevent claims** in any server with PokEvent if these "
-            "buttons expire or DMs are unavailable.",
+            "Use **/pokevent setup → League Claims** in a server where "
+            "you are an administrator if this DM is unavailable.",
             view=LeagueClaimReviewView(str(guild.id)),
         )
     except (discord.Forbidden, discord.HTTPException):
