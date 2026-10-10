@@ -2082,7 +2082,7 @@ class SetupDashboardView(discord.ui.View):
             self.add_item(SetupDashboardButton(
                 self, "claim_reviews", "League Claims", row=2,
             ))
-        guild = bot.get_guild(int(guild_id))
+        guild = bot.get_guild(int(guild_id)) if guild_id.isdecimal() else None
         if guild is not None and guild.owner_id == invoker_id:
             self.add_item(SetupDashboardButton(
                 self, "claim_owner", "Claim My League", row=2,
