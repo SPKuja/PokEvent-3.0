@@ -4717,7 +4717,7 @@ class _LeagueEventSelect(discord.ui.Select):
                 discord.SelectOption(
                     label=event.title[:100],
                     description=(
-                        f"{event.starts_at.strftime('%d %b %Y')} · "
+                        f"{_uk_event_datetime(event.starts_at)[:10]} · "
                         f"{event.status}"
                     )[:100],
                     value=event.id,
@@ -4749,6 +4749,22 @@ class _LeagueEventButton(discord.ui.Button):
         await self.manager.action(interaction, self.action)
 
 
+def _uk_event_datetime(value: datetime) -> str:
+    """Fixed UK date/time format, independent of Discord client's locale."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(ZoneInfo(settings.local_timezone)).strftime("%d/%m/%Y %H:%M")
+
+
+def _parse_uk_event_datetime(value: str) -> datetime:
+    """Read DD/MM/YYYY HH:MM and return a timezone-aware UTC datetime."""
+    try:
+        local = datetime.strptime(value.strip(), "%d/%m/%Y %H:%M")
+    except ValueError as exc:
+        raise ValueError("Enter the date as DD/MM/YYYY HH:MM, e.g. 18/10/2026 11:00.") from exc
+    return local.replace(tzinfo=ZoneInfo(settings.local_timezone)).astimezone(UTC)
+
+
 class LeagueEventEditModal(discord.ui.Modal, title="Edit League event"):
     def __init__(self, manager: LeagueEventManagerView, event: Event) -> None:
         super().__init__()
@@ -4760,28 +4776,22 @@ class LeagueEventEditModal(discord.ui.Modal, title="Edit League event"):
         self.venue_input = discord.ui.TextInput(
             default=event.venue_name or "", max_length=255,
         )
-        local = event.starts_at.replace(tzinfo=UTC) if event.starts_at.tzinfo is None else event.starts_at
         self.start_input = discord.ui.TextInput(
-            default=local.astimezone(
-                ZoneInfo(settings.local_timezone)
-            ).strftime("%Y-%m-%d %H:%M"),
-            placeholder="2026-10-18 11:00",
+            default=_uk_event_datetime(event.starts_at),
+            placeholder="18/10/2026 11:00",
             max_length=16,
         )
         self.add_item(discord.ui.Label(text="Event title", component=self.title_input))
         self.add_item(discord.ui.Label(text="Venue name", component=self.venue_input))
         self.add_item(discord.ui.Label(
-            text="Start time (UK local)", component=self.start_input,
+            text="Date & time (DD/MM/YYYY HH:MM, UK)", component=self.start_input,
         ))
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if not await self.manager.interaction_check(interaction):
             return
         try:
-            local = datetime.strptime(
-                self.start_input.value.strip(), "%Y-%m-%d %H:%M",
-            ).replace(tzinfo=ZoneInfo(settings.local_timezone))
-            start = local.astimezone(UTC)
+            start = _parse_uk_event_datetime(self.start_input.value)
             async with SessionFactory() as session:
                 await change_event(
                     session, self.manager.guild_id, self.event_id,
@@ -4846,7 +4856,7 @@ class LeagueEventManagerView(discord.ui.View):
             "## 🛠️ Manage verified League events",
             f"**League:** {settings.leagues.get(self.league_id, self.league_id)}",
             f"**Event:** {event.title}",
-            f"**Date:** {discord.utils.format_dt(event.starts_at, style='F')}",
+            f"**Date:** {_uk_event_datetime(event.starts_at)} (UK)",
             f"**Venue:** {event.venue_name or 'Unknown'}",
             f"**Status:** {event.status}",
             "",
