@@ -57,7 +57,7 @@ def _validate_feed_url(template: str) -> None:
 
 def _normalise_event(raw: Any, league_id: str) -> dict[str, Any]:
     if not isinstance(raw, dict):
-        raise ValueError("Verification feed contained a non-object event")
+        raise TypeError("Verification feed contained a non-object event")
     if raw.get("league_id") != league_id:
         raise ValueError("Verification feed contains an event from another league")
     tournament_id = raw.get("tournament_id")
@@ -88,7 +88,7 @@ def _normalise_event(raw: Any, league_id: str) -> dict[str, Any]:
         if not isinstance(value, str):
             raise ValueError(f"Invalid starts_at in verified {tournament_id}")
         try:
-            starts_at = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            starts_at = datetime.fromisoformat(value)
         except ValueError as exc:
             raise ValueError(f"Invalid starts_at in verified {tournament_id}") from exc
         if starts_at.tzinfo is None:
