@@ -5076,13 +5076,14 @@ class _ClaimReviewButton(discord.ui.Button):
         except (ValueError, IntegrityError) as exc:
             await _send_error(interaction, str(exc))
             return
-        await interaction.response.edit_message(
-            content=(
-                f"{'✅ Approved' if self.approve else '❌ Rejected'} "
-                f"League **{league_id}** for server **{self.guild_id}**."
-            ),
-            view=None,
+        result_text = (
+            f"{'✅ Approved' if self.approve else '❌ Rejected'} "
+            f"League **{league_id}** for server **{self.guild_id}**."
         )
+        if interaction.type == discord.InteractionType.component:
+            await interaction.response.edit_message(content=result_text, view=None)
+        else:
+            await interaction.response.send_message(result_text, ephemeral=True)
         try:
             owner = await bot.fetch_user(int(owner_id))
             await owner.send(
