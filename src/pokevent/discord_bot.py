@@ -3162,6 +3162,8 @@ class LeagueManagerView(discord.ui.View):
                 )
                 await session.commit()
             self.default_league_id = chosen.league_id
+            if settings.owner_user_id:
+                asyncio.create_task(_send_existing_claim_invitations({int(self.guild_id)}))
             await refresh_guild_summary_messages(self.guild_id)
             self.rebuild()
             await interaction.response.edit_message(
@@ -3868,6 +3870,8 @@ class SetupWizard(discord.ui.View):
             await session.commit()
 
         self.default_league_id = chosen.league_id
+        if settings.owner_user_id:
+            asyncio.create_task(_send_existing_claim_invitations({int(self.guild_id)}))
         self.show_default_channel_step()
         await interaction.response.edit_message(
             content=(
@@ -5128,10 +5132,14 @@ async def _notify_claim_reviewer(guild: discord.Guild, league_id: str) -> None:
         log.warning("could not deliver League claim review to owner Discord DM")
 
 
-async def _send_existing_claim_invitations() -> None:
+async def _send_existing_claim_invitations(
+    guild_ids: set[int] | None = None,
+) -> None:
     if not settings.owner_user_id:
         return
     for guild in bot.guilds:
+        if guild_ids is not None and guild.id not in guild_ids:
+            continue
         try:
             async with SessionFactory() as session:
                 config = await session.get(GuildConfig, str(guild.id))
