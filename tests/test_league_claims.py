@@ -134,7 +134,7 @@ async def test_manual_override_is_league_scoped_and_survives_pokedata(sessions) 
         await upsert_snapshots(session, [corrected])
         assert (await session.get(Event, event.id)).status == "cancelled"
 
-        assert await remove_override(session, "guild-a", event.id)
+        assert await remove_override(session, "guild-a", event.id, "admin-a")
         await session.commit()
         restored = (await apply_manual_snapshots(session, [snapshot]))[0]
         assert restored.status == "active"
