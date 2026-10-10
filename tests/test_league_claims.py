@@ -2,11 +2,9 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
-
-from pokevent.catalogue import reconcile_missing_events
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from pokevent.catalogue import upsert_snapshots
+from pokevent.catalogue import reconcile_missing_events, upsert_snapshots
 from pokevent.domain import EventSnapshot
 from pokevent.league_claims import (
     apply_manual_snapshots,
@@ -21,7 +19,12 @@ from pokevent.league_claims import (
     review_claim,
 )
 from pokevent.models import (
-    Base, Event, EventEditAudit, GuildConfig, LeagueClaim, ManualEventOverride,
+    Base,
+    Event,
+    EventEditAudit,
+    GuildConfig,
+    LeagueClaim,
+    ManualEventOverride,
 )
 
 SWINDON = "2012924"
