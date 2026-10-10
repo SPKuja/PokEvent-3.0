@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .domain import EventSnapshot, EventStatus
-from .models import Event, Organisation, utcnow
+from .models import Event, ManualEventOverride, Organisation, utcnow
 
 
 @dataclass(slots=True)
@@ -174,6 +174,11 @@ async def reconcile_missing_events(
                     Event.starts_at < window_end,
                     Event.status.in_(
                         [EventStatus.ACTIVE.value, EventStatus.UNLISTED.value]
+                    ),
+                    Event.id.not_in(
+                        select(ManualEventOverride.event_id).where(
+                            ManualEventOverride.status.is_not(None)
+                        )
                     ),
                 )
             )
