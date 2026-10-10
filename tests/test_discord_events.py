@@ -207,11 +207,35 @@ def test_admin_commands_are_consolidated_under_pokevent_setup() -> None:
 
     pokevent = top_level["pokevent"]
     subcommands = {command.name for command in pokevent.commands}
-    assert subcommands == {
-        "setup", "status", "claim", "claims", "reviewclaim",
-        "unclaim", "releaseclaim", "manageevents",
-    }
+    assert subcommands == {"setup", "status"}
 
+
+
+def test_claim_review_controls_only_visible_to_pokevent_owner(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from pokevent import discord_bot
+
+    monkeypatch.setattr(discord_bot.settings, "owner_user_id", 1001)
+    monkeypatch.setattr(
+        discord_bot.bot, "get_guild",
+        lambda guild_id: SimpleNamespace(id=guild_id, owner_id=2002),
+    )
+
+    bot_owner_view = SetupDashboardView(invoker_id=1001, guild_id="123")
+    guild_owner_view = SetupDashboardView(invoker_id=2002, guild_id="123")
+    ordinary_admin_view = SetupDashboardView(invoker_id=3003, guild_id="123")
+
+    def labels(view):
+        return {item.label for item in view.children}
+
+    assert "League Claims" in labels(bot_owner_view)
+    assert "League Claims" not in labels(guild_owner_view)
+    assert "League Claims" not in labels(ordinary_admin_view)
+    assert "Claim My League" not in labels(bot_owner_view)
+    assert "Claim My League" in labels(guild_owner_view)
+    assert "Claim My League" not in labels(ordinary_admin_view)
+    assert "Manage Events" in labels(ordinary_admin_view)
 
 
 def test_cancelled_event_card_is_visibly_marked_and_not_registerable() -> None:
