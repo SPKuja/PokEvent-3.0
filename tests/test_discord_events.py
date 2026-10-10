@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import discord
+import pytest
 from PIL import Image
 
 from pokevent.discord_bot import (
@@ -17,10 +18,12 @@ from pokevent.discord_bot import (
     _event_snapshot,
     _event_update_notice,
     _official_event_url,
+    _parse_uk_event_datetime,
     _public_calendar_url,
     _render_welcome_banner,
     _summary_embed,
     _thread_name,
+    _uk_event_datetime,
     _welcome_message,
     bot,
     event_page_content,
@@ -207,11 +210,47 @@ def test_admin_commands_are_consolidated_under_pokevent_setup() -> None:
 
     pokevent = top_level["pokevent"]
     subcommands = {command.name for command in pokevent.commands}
-    assert subcommands == {
-        "setup", "status", "claim", "claims", "reviewclaim",
-        "unclaim", "releaseclaim", "manageevents",
-    }
+    assert subcommands == {"setup", "status"}
 
+
+
+def test_claim_review_controls_only_visible_to_pokevent_owner(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from pokevent import discord_bot
+
+    monkeypatch.setattr(discord_bot.settings, "owner_user_id", 1001)
+    monkeypatch.setattr(
+        discord_bot.bot, "get_guild",
+        lambda guild_id: SimpleNamespace(id=guild_id, owner_id=2002),
+    )
+
+    bot_owner_view = SetupDashboardView(invoker_id=1001, guild_id="123")
+    guild_owner_view = SetupDashboardView(invoker_id=2002, guild_id="123")
+    ordinary_admin_view = SetupDashboardView(invoker_id=3003, guild_id="123")
+
+    def labels(view):
+        return {item.label for item in view.children}
+
+    assert "League Claims" in labels(bot_owner_view)
+    assert "League Claims" not in labels(guild_owner_view)
+    assert "League Claims" not in labels(ordinary_admin_view)
+    assert "Claim My League" not in labels(bot_owner_view)
+    assert "Claim My League" in labels(guild_owner_view)
+    assert "Claim My League" not in labels(ordinary_admin_view)
+    assert "Manage Events" in labels(ordinary_admin_view)
+
+
+def test_manual_event_dates_use_uk_day_month_year_format() -> None:
+    # 18 October is still BST; the editor should show local UK time.
+    instant = datetime(2026, 10, 18, 10, 0, tzinfo=UTC)
+    assert _uk_event_datetime(instant) == "18/10/2026 11:00"
+    assert _parse_uk_event_datetime("18/10/2026 11:00") == instant
+    assert _uk_event_datetime(datetime(2026, 12, 1, 16, tzinfo=UTC)) == (
+        "01/12/2026 16:00"
+    )
+    with pytest.raises(ValueError, match="DD/MM/YYYY HH:MM"):
+        _parse_uk_event_datetime("10/18/2026 11:00")
 
 
 def test_cancelled_event_card_is_visibly_marked_and_not_registerable() -> None:
