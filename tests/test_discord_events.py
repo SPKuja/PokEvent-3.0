@@ -207,7 +207,10 @@ def test_admin_commands_are_consolidated_under_pokevent_setup() -> None:
 
     pokevent = top_level["pokevent"]
     subcommands = {command.name for command in pokevent.commands}
-    assert subcommands == {"setup", "status"}
+    assert subcommands == {
+        "setup", "status", "claim", "claims", "reviewclaim",
+        "unclaim", "releaseclaim", "manageevents",
+    }
 
 
 

@@ -39,6 +39,8 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite+aiosqlite:///./data/pokevent.db"
     discord_token: str | None = None
+    # Discord user ID of the PokEvent owner who reviews League claims.
+    owner_user_id: int | None = None
     public_base_url: str = "http://localhost:8080"
 
     community_name: str = "Pokémon League Swindon"

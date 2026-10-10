@@ -9,6 +9,7 @@ from .config import get_settings
 from .db import SessionFactory
 from .domain import EventSearch, EventSnapshot
 from .guild_config import all_monitored_league_ids, baseline_pending_routes
+from .league_claims import apply_manual_snapshots
 from .sources.pokedata import PokedataSource
 from .verifier import apply_verified_snapshots, run_daily_verification
 
@@ -62,6 +63,7 @@ async def sync_once() -> CatalogueSyncResult:
         # Authoritative corrections take precedence over stale Pokédata values.
         # This is reapplied on EVERY normal sync, not just once a day.
         snapshots = await apply_verified_snapshots(session, snapshots)
+        snapshots = await apply_manual_snapshots(session, snapshots)
         result = await upsert_snapshots(session, snapshots)
         window_start = search.starts_after
         if window_start is None:
