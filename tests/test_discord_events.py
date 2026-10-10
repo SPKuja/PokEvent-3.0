@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import discord
+import pytest
 from PIL import Image
 
 from pokevent.discord_bot import (
@@ -9,6 +10,8 @@ from pokevent.discord_bot import (
     EVENTS_PAGE_SIZE,
     POKEMON_WELCOME_MESSAGES,
     SetupDashboardView,
+    _parse_uk_event_datetime,
+    _uk_event_datetime,
     _event_announcement_mentions,
     _event_cleanup_at,
     _event_embed,
@@ -236,6 +239,18 @@ def test_claim_review_controls_only_visible_to_pokevent_owner(monkeypatch) -> No
     assert "Claim My League" in labels(guild_owner_view)
     assert "Claim My League" not in labels(ordinary_admin_view)
     assert "Manage Events" in labels(ordinary_admin_view)
+
+
+def test_manual_event_dates_use_uk_day_month_year_format() -> None:
+    # 18 October is still BST; the editor should show local UK time.
+    instant = datetime(2026, 10, 18, 10, 0, tzinfo=UTC)
+    assert _uk_event_datetime(instant) == "18/10/2026 11:00"
+    assert _parse_uk_event_datetime("18/10/2026 11:00") == instant
+    assert _uk_event_datetime(datetime(2026, 12, 1, 16, tzinfo=UTC)) == (
+        "01/12/2026 16:00"
+    )
+    with pytest.raises(ValueError, match="DD/MM/YYYY HH:MM"):
+        _parse_uk_event_datetime("10/18/2026 11:00")
 
 
 def test_cancelled_event_card_is_visibly_marked_and_not_registerable() -> None:
