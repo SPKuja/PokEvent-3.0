@@ -349,8 +349,10 @@ def _event_embed(
         sections.extend(
             [
                 "### ⚠️ No longer listed",
-                "This event is no longer returned by the event source. "
-                "This does not confirm the organiser cancelled it.",
+                (
+                    "This event is no longer returned by the event source. "
+                    "This does not confirm the organiser cancelled it."
+                ),
                 "",
                 "━━━━━━━━━━━━━━━━━━━━",
                 "",
