@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from pokevent.catalogue import upsert_snapshots
@@ -114,9 +115,7 @@ async def test_manual_override_is_league_scoped_and_survives_pokedata(sessions) 
         await session.commit()
         await upsert_snapshots(session, [snapshot])
 
-        event = await session.get(Event, (
-            await session.scalar(__import__("sqlalchemy").select(Event.id))
-        ))
+        event = await session.get(Event, await session.scalar(select(Event.id)))
         assert event.status == "active"
         with pytest.raises(ValueError, match="not verified"):
             await change_event(
@@ -149,6 +148,6 @@ async def test_unclaimed_server_cannot_edit_any_event(sessions) -> None:
         session.add(GuildConfig(guild_id="guild-a", default_league_id=SWINDON))
         await session.commit()
         await upsert_snapshots(session, [swindon_event()])
-        event = await session.get(Event, await session.scalar(__import__("sqlalchemy").select(Event.id)))
+        event = await session.get(Event, await session.scalar(select(Event.id)))
         with pytest.raises(ValueError, match="not verified"):
             await owned_event(session, "guild-a", event.id)
