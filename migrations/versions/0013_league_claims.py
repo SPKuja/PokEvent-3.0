@@ -43,6 +43,7 @@ def upgrade() -> None:
         sa.Column("title", sa.String(500)),
         sa.Column("starts_at", sa.DateTime(timezone=True)),
         sa.Column("venue_name", sa.String(255)),
+        sa.Column("ends_at", sa.DateTime(timezone=True)),
         sa.Column("updated_by_user_id", sa.String(32), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
     )
