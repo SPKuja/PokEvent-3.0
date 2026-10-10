@@ -96,6 +96,37 @@ class Event(Base):
     )
 
 
+class VerificationRecord(Base):
+    """Explicitly verified corrections independent of Pokédata's cache."""
+
+    __tablename__ = "verification_records"
+    __table_args__ = (
+        UniqueConstraint("league_id", "tournament_id",
+                         name="uq_verified_league_tournament"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    league_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    tournament_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    title: Mapped[str | None] = mapped_column(String(500))
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    venue_name: Mapped[str | None] = mapped_column(String(255))
+    verified_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+
+class VerificationCheckpoint(Base):
+    """Persists the daily schedule across container restarts."""
+
+    __tablename__ = "verification_checkpoints"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    last_success_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
 class GuildConfig(Base):
     __tablename__ = "guild_configs"
 

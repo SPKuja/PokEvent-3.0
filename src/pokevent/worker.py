@@ -10,6 +10,7 @@ from .db import SessionFactory
 from .domain import EventSearch, EventSnapshot
 from .guild_config import all_monitored_league_ids, baseline_pending_routes
 from .sources.pokedata import PokedataSource
+from .verifier import apply_verified_snapshots, run_daily_verification
 
 log = logging.getLogger("pokevent.worker")
 settings = get_settings()
@@ -58,6 +59,9 @@ async def sync_once() -> CatalogueSyncResult:
     ]
 
     async with SessionFactory() as session:
+        # Authoritative corrections take precedence over stale Pokédata values.
+        # This is reapplied on EVERY normal sync, not just once a day.
+        snapshots = await apply_verified_snapshots(session, snapshots)
         result = await upsert_snapshots(session, snapshots)
         window_start = search.starts_after
         if window_start is None:
@@ -101,6 +105,19 @@ async def run_worker() -> None:
     )
 
     while True:
+        try:
+            # Verification is best-effort and never blocks ordinary discovery.
+            # It runs once per configured 24-hour window, persisted in the DB.
+            await run_daily_verification(
+                SessionFactory,
+                feed_url=settings.verification_feed_url,
+                token=settings.verification_feed_token,
+                league_ids=set(settings.leagues),
+                interval_hours=settings.verification_interval_hours,
+            )
+        except Exception:
+            log.exception("daily event verification failed; Pokédata retained")
+
         try:
             await sync_once()
         except Exception:

@@ -64,6 +64,12 @@ class Settings(BaseSettings):
 
     event_source: str = "pokedata"
     sync_interval_minutes: int = 180
+
+    # Optional authorised independent verification feed. Must be an HTTPS URL
+    # containing {league_id}; disabled until an approved source is configured.
+    verification_feed_url: str | None = None
+    verification_feed_token: str | None = None
+    verification_interval_hours: int = Field(default=24, ge=24)
     sync_guild_commands: bool = True
 
     create_event_threads: bool = True

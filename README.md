@@ -150,3 +150,14 @@ which allows a deployment to be pinned to a specific release if desired.
 
 
 The `/pokevent setup` admin dashboard includes **Check New Events**, which runs an immediate source sync, publishes any genuinely new routed events and refreshes the server's rolling summaries.
+
+
+### Daily independent event verification (optional)
+
+PokEvent supports a once-daily comparison against an independent authorised
+JSON event feed for the five configured Leagues. Confirmed statuses, dates,
+titles and venues override stale Pokédata fields and persist through subsequent
+syncs. **No official Pokémon feed has yet been integrated.** The verifier is
+disabled unless an approved HTTPS endpoint is configured.
+
+See [daily verification configuration](docs/daily-verification.md).
