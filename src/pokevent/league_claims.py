@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .catalogue import event_content_hash
-from .domain import EventSnapshot
+from .domain import EventSnapshot, EventStatus
 from .models import (
     Event,
     GuildConfig,
@@ -22,7 +22,8 @@ from .models import (
 )
 
 ACTIVE_CLAIM_STATES = {"invited", "pending", "approved"}
-ALLOWED_FIELDS = {"status", "title", "starts_at", "venue_name"}
+ALLOWED_FIELDS = {"status", "title", "starts_at", "venue_name", "ends_at"}
+EDITABLE_FIELDS = ALLOWED_FIELDS - {"ends_at"}
 
 
 async def approved_for_league(
@@ -167,7 +168,7 @@ async def change_event(
     user_id: str,
     **changes: object,
 ) -> Event:
-    if not changes or set(changes) - ALLOWED_FIELDS:
+    if not changes or set(changes) - EDITABLE_FIELDS:
         raise ValueError("No supported changes were supplied.")
     event = await owned_event(session, guild_id, event_id)
     if "status" in changes and changes["status"] not in ("active", "cancelled"):
@@ -197,6 +198,7 @@ async def change_event(
 
     if "starts_at" in changes and event.ends_at is not None:
         event.ends_at += changes["starts_at"] - event.starts_at
+        override.ends_at = event.ends_at
 
     for name, value in changes.items():
         setattr(event, name, value)
@@ -284,5 +286,7 @@ async def apply_manual_snapshots(
             for field in ALLOWED_FIELDS
             if getattr(row, field) is not None
         }
+        if "status" in changes:
+            changes["status"] = EventStatus(changes["status"])
         result.append(snapshot.model_copy(update=changes))
     return result
