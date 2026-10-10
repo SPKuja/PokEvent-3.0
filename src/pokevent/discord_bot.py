@@ -5277,7 +5277,7 @@ async def pokevent_releaseclaim(
         await _send_error(interaction, "Only the PokEvent owner can revoke a claim.")
         return
     async with SessionFactory() as session:
-        claim = await release_claim(session, guild_id)
+        claim = await release_claim(session, guild_id, force=True)
         await session.commit()
     await interaction.response.send_message(
         f"Released League **{claim.league_id}** from server **{guild_id}**."
