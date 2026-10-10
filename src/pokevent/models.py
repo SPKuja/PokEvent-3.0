@@ -9,12 +9,12 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
-    Integer,
     Index,
-    text,
+    Integer,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
