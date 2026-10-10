@@ -53,7 +53,7 @@ async def invite_server_owner(
     if existing is not None:
         if existing.status in ACTIVE_CLAIM_STATES:
             return False
-        if existing.status in {"declined", "rejected"} and existing.league_id == league_id:
+        if existing.status in {"declined", "rejected", "released"} and existing.league_id == league_id:
             return False
     if await approved_for_league(session, league_id) is not None:
         return False
@@ -148,10 +148,13 @@ async def review_claim(
 
 
 async def release_claim(
-    session: AsyncSession, guild_id: str,
+    session: AsyncSession, guild_id: str, *, force: bool = False,
 ) -> LeagueClaim | None:
     claim = await session.get(LeagueClaim, guild_id)
-    if claim is None or claim.status not in ACTIVE_CLAIM_STATES:
+    if claim is None or (
+        claim.status not in ACTIVE_CLAIM_STATES
+        and (not force or claim.status == "released")
+    ):
         return None
     claim.status = "released"
     await session.flush()
