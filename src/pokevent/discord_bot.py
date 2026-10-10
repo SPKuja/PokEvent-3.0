@@ -9,8 +9,8 @@ import math
 import random
 import re
 from datetime import UTC, datetime, timedelta
-from zoneinfo import ZoneInfo
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
@@ -55,9 +55,9 @@ from .models import (
     BotRuntime,
     ChannelSummary,
     Event,
+    GuildConfig,
     GuildLeague,
     LeagueClaim,
-    ManualEventOverride,
     PublishedMessage,
     Route,
 )
@@ -4833,8 +4833,8 @@ class LeagueEventManagerView(discord.ui.View):
             f"**Venue:** {event.venue_name or 'Unknown'}",
             f"**Status:** {event.status}",
             "",
-            "Changes are permanent overrides of Pokédata, visible across "
-            "every server following this League.",
+            ("Changes are permanent overrides of Pokédata, visible across "
+             "every server following this League."),
             "Restore from Pokédata removes all manual corrections for this event.",
         ]
         if notice:
