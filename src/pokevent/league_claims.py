@@ -13,7 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .catalogue import event_content_hash
 from .domain import EventSnapshot
 from .models import (
-    Event, GuildConfig, LeagueClaim, ManualEventOverride, Organisation, utcnow,
+    Event,
+    GuildConfig,
+    LeagueClaim,
+    ManualEventOverride,
+    Organisation,
+    utcnow,
 )
 
 ACTIVE_CLAIM_STATES = {"invited", "pending", "approved"}
