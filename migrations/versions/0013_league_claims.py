@@ -51,9 +51,24 @@ def upgrade() -> None:
         "ix_manual_event_overrides_league_id",
         "manual_event_overrides", ["league_id"],
     )
+    op.create_table(
+        "event_edit_audit",
+        sa.Column("id", sa.String(36), primary_key=True),
+        sa.Column("event_id", sa.String(36), sa.ForeignKey("events.id", ondelete="CASCADE"), nullable=False),
+        sa.Column("guild_id", sa.String(32), nullable=False),
+        sa.Column("league_id", sa.String(255), nullable=False),
+        sa.Column("user_id", sa.String(32), nullable=False),
+        sa.Column("action", sa.String(32), nullable=False),
+        sa.Column("before", sa.JSON()),
+        sa.Column("after", sa.JSON()),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+    )
+    op.create_index("ix_event_edit_audit_event_id", "event_edit_audit", ["event_id"])
 
 
 def downgrade() -> None:
+    op.drop_index("ix_event_edit_audit_event_id", table_name="event_edit_audit")
+    op.drop_table("event_edit_audit")
     op.drop_index("ix_manual_event_overrides_league_id", table_name="manual_event_overrides")
     op.drop_table("manual_event_overrides")
     op.drop_index("uq_approved_claim_league", table_name="league_claims")
