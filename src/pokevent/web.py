@@ -166,7 +166,7 @@ async def upcoming_events(
     configured_only: bool = True,
 ) -> list[dict]:
     now = datetime.now(UTC)
-    statuses = ["active", "cancelled"] if include_cancelled else ["active"]
+    statuses = ["active", "cancelled", "unlisted"] if include_cancelled else ["active"]
     filters = [
         Event.starts_at >= now,
         Event.status.in_(statuses),

@@ -66,6 +66,7 @@ class Event(Base):
     game: Mapped[str | None] = mapped_column(String(32))
     event_type: Mapped[str | None] = mapped_column(String(128))
     status: Mapped[str] = mapped_column(String(32), default="active")
+    missing_syncs: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     owner_guild_id: Mapped[str | None] = mapped_column(String(32), index=True)
     created_by_user_id: Mapped[str | None] = mapped_column(String(32))
     description: Mapped[str | None] = mapped_column(Text)

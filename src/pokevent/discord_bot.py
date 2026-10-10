@@ -345,6 +345,18 @@ def _event_embed(
             ]
         )
 
+    if event.status == "unlisted":
+        sections.extend(
+            [
+                "### ⚠️ No longer listed",
+                "This event is no longer returned by the event source. "
+                "This does not confirm the organiser cancelled it.",
+                "",
+                "━━━━━━━━━━━━━━━━━━━━",
+                "",
+            ]
+        )
+
     if preview:
         sections.extend(
             [
@@ -397,13 +409,19 @@ def _event_embed(
     title = event.title
     if event.status == "cancelled":
         title = f"❌ CANCELLED · {title}"
+    elif event.status == "unlisted":
+        title = f"⚠️ NO LONGER LISTED · {title}"
 
     embed = discord.Embed(
         title=title[:256],
         url=official_url,
         description="\n".join(sections),
         timestamp=event.starts_at,
-        colour=discord.Colour.red() if event.status == "cancelled" else None,
+        colour=(
+            discord.Colour.red() if event.status == "cancelled"
+            else discord.Colour.orange() if event.status == "unlisted"
+            else None
+        ),
     )
     embed.set_footer(text="PokÈvent 3.0 · Play! Pokémon")
     return embed
@@ -428,7 +446,7 @@ def _event_link_view(event: Event) -> discord.ui.View | None:
         )
 
     if (
-        event.status != "cancelled"
+        event.status == "active"
         and registration_url
         and registration_url != official_url
     ):
@@ -741,6 +759,12 @@ def _event_update_notice(
     current = _event_snapshot(event)
 
     if previous is None:
+        if event.status == "unlisted":
+            return (
+                "### ⚠️ No longer listed\n"
+                "This event has disappeared from the source feed. "
+                "This is not a confirmed cancellation."
+            )
         if event.status == "cancelled":
             return (
                 "### ❌ Event cancelled\n"
@@ -760,7 +784,9 @@ def _event_update_notice(
     if status_changed:
         if current["status"] == "cancelled":
             lines.append("### ❌ Event cancelled")
-        elif old_status == "cancelled":
+        elif current["status"] == "unlisted":
+            lines.append("### ⚠️ No longer listed (not a confirmed cancellation)")
+        elif old_status in {"cancelled", "unlisted"} and current["status"] == "active":
             lines.append("### ✅ Event active again")
         else:
             lines.append("### 🔄 Event status updated")
@@ -1101,7 +1127,12 @@ def _summary_event_line(event: Event) -> str:
     game = _game_label(event.game)
     if game:
         bits.append(game)
-    return " · ".join(bits)
+    line = " · ".join(bits)
+    if event.status == "cancelled":
+        return f"~~{line}~~ · **❌ Cancelled**"
+    if event.status == "unlisted":
+        return f"~~{line}~~ · **⚠️ No longer listed**"
+    return line
 
 
 def _summary_embed(
@@ -1233,7 +1264,7 @@ async def refresh_guild_summary_messages(guild_id: str) -> int:
                     await session.scalars(
                         select(Event)
                         .where(
-                            Event.status == "active",
+                            Event.status.in_(("active", "cancelled", "unlisted")),
                             Event.starts_at >= now,
                             _supported_event_clause(),
                             Event.upstream_organisation_id.in_(league_ids),
@@ -2171,6 +2202,8 @@ class SetupDashboardView(discord.ui.View):
                         "Event check complete · "
                         f"{result.created} new · "
                         f"{result.updated} updated · "
+                        f"{result.unlisted} no longer listed · "
+                        f"{result.pending_missing} pending verification · "
                         f"{result.unchanged} unchanged"
                     ),
                 ),

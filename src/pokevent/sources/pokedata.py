@@ -217,6 +217,8 @@ class PokedataSource(EventSource):
         self.local_timezone = local_timezone
         self.horizon_days = horizon_days
         self.monitored_league_ids = monitored_league_ids or set()
+        # All upstream GUIDs, including records filtered out locally.
+        self.latest_source_ids: set[str] = set()
 
     @staticmethod
     def _headers() -> dict[str, str]:
@@ -363,6 +365,11 @@ class PokedataSource(EventSource):
             if owns_client:
                 await client.aclose()
 
+        self.latest_source_ids = {
+            guid
+            for raw in raw_events
+            if (guid := _text(raw.get("guid")) or _text(raw.get("Guid")))
+        }
         results: list[EventSnapshot] = []
         for raw in raw_events:
             try:

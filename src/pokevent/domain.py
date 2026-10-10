@@ -16,6 +16,7 @@ class Game(StrEnum):
 class EventStatus(StrEnum):
     ACTIVE = "active"
     CANCELLED = "cancelled"
+    UNLISTED = "unlisted"
     UNKNOWN = "unknown"
 
 

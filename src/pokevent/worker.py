@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time, timedelta
 
-from .catalogue import CatalogueSyncResult, upsert_snapshots
+from .catalogue import CatalogueSyncResult, reconcile_missing_events, upsert_snapshots
 from .config import get_settings
 from .db import SessionFactory
 from .domain import EventSearch, EventSnapshot
@@ -59,17 +59,36 @@ async def sync_once() -> CatalogueSyncResult:
 
     async with SessionFactory() as session:
         result = await upsert_snapshots(session, snapshots)
+        window_start = search.starts_after
+        if window_start is None:
+            raise RuntimeError("The sync window must have a start time")
+        # The end boundary stays safely inside the upstream date range.
+        window_end = datetime.combine(
+            window_start.date() + timedelta(days=settings.event_horizon_days),
+            time.min,
+            tzinfo=UTC,
+        )
+        result.pending_missing, result.unlisted = await reconcile_missing_events(
+            session,
+            source=source.name,
+            raw_event_ids=source.latest_source_ids,
+            window_start=window_start,
+            window_end=window_end,
+            country_code=settings.country_code.upper(),
+        )
         baselined = await baseline_pending_routes(session)
         await session.commit()
 
     log.info(
         "sync complete source=%s fetched=%s created=%s updated=%s unchanged=%s "
-        "routes_baselined=%s",
+        "pending_missing=%s unlisted=%s routes_baselined=%s",
         source.name,
         result.fetched,
         result.created,
         result.updated,
         result.unchanged,
+        result.pending_missing,
+        result.unlisted,
         baselined,
     )
     return result
