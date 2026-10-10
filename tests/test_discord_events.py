@@ -406,3 +406,44 @@ def test_admin_dashboard_has_manual_event_check() -> None:
 
     assert "Check New Events" in labels
     assert "Community Events" not in labels
+
+
+def test_cancelled_and_unlisted_events_are_crossed_out_in_summary() -> None:
+    from pokevent.discord_bot import _summary_event_line
+
+    event = _event(0)
+    event.game = "tcg"
+    event.status = "cancelled"
+    cancelled = _summary_event_line(event)
+    assert cancelled.startswith("~~")
+    assert "~~ · **❌ Cancelled**" in cancelled
+
+    event.status = "unlisted"
+    unlisted = _summary_event_line(event)
+    assert unlisted.startswith("~~")
+    assert "~~ · **⚠️ No longer listed**" in unlisted
+
+    event.status = "active"
+    assert not _summary_event_line(event).startswith("~~")
+
+
+def test_unlisted_event_disables_registration_and_is_not_called_cancelled() -> None:
+    event = _event(0)
+    event.status = "unlisted"
+    event.registration_url = "https://example.com/register"
+    event.source_url = "https://www.pokemon.com/play-pokemon-tournaments/test-123/"
+    embed = _event_embed(event, "Example League")
+    assert embed.title.startswith("⚠️ NO LONGER LISTED")
+    assert "does not confirm" in (embed.description or "")
+    view = _event_link_view(event)
+    assert view is not None
+    assert len(view.children) == 1
+    assert view.children[0].label == "View on Pokémon"
+
+
+def test_unlisted_event_gets_distinct_update_notification() -> None:
+    event = _event(0)
+    event.status = "active"
+    before = _event_snapshot(event)
+    event.status = "unlisted"
+    assert "not a confirmed cancellation" in _event_update_notice(before, event)

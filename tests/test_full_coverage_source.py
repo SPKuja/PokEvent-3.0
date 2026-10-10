@@ -155,6 +155,8 @@ async def test_source_pages_complete_country_date_catalogue_and_filters_locally(
         "swindon",
         "nearby-vgc",
     }
+    # A row excluded by the local radius is still present at the source.
+    assert source.latest_source_ids == {"swindon", "nearby-vgc", "far"}
 
 
 @pytest.mark.asyncio
