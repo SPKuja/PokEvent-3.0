@@ -35,28 +35,30 @@ whether they own the default League.
 - **No thanks:** remembers the decline; the server still receives all
   Pokédata event announcements and can view events, but nobody may edit them.
 - **DMs disabled:** the server owner can always initiate the claim using
-  `/pokevent claim` inside their server.
+  `/pokevent setup` → **Claim My League** inside their server.
 
-Owners can use `/pokevent claim` later if they change their mind.
+Owners can use `/pokevent setup` → **Claim My League** later if they change their mind.
 The bot also offers a claim when a server's default League is first set.
 
 ## Review and manage claims
 
 Only the configured `POKEVENT_OWNER_USER_ID` can approve or reject claims,
-including via DM or these fallback commands in any server running the bot:
+either through the approval buttons in their Discord DMs or via
+**`/pokevent setup` → League Claims** on a server where they have Discord
+Administrator permission. The **League Claims** button is **visible only
+to the bot owner**; other admins cannot see or use it.
 
-- `/pokevent claims` lists pending requests with the Guild ID, League ID
-  and claiming owner.
-- `/pokevent reviewclaim guild_id:<ID> approve:true` verifies a claim.
-- `/pokevent reviewclaim guild_id:<ID> approve:false` rejects a claim.
-- `/pokevent releaseclaim guild_id:<ID>` releases a server's claim.
+The owner-only panel lists pending and verified claims, and lets the owner
+approve, reject or release them without adding public slash commands.
+The default League claim invitation can be opened via the **Claim My League**
+button, which is shown only to that **Discord server's owner** in setup.
 
 **Verify ownership independently before approving.** A League ID can be
 entered by any Discord admin as a subscription and is not evidence of
 ownership. The bot also checks whether the server's current owner submitted
 the request and whether the default League changed since the request.
 
-A server owner can use `/pokevent unclaim` to relinquish an active claim.
+A server owner can use **Claim My League → Release this League** to relinquish an active claim.
 A server that is not approved cannot edit even if it has configured the
 League as its default.
 
@@ -65,10 +67,8 @@ two servers cannot simultaneously own the same League.
 
 ## Manual event corrections
 
-Once approved, **all Discord administrators in the claimed server** can use:
-
-- `/pokevent setup` → **Manage Events**, or
-- `/pokevent manageevents`.
+Once approved, **all Discord administrators in the claimed server** can use
+`/pokevent setup` → **Manage Events**.
 
 Choose one of the upcoming events from that *one verified League* and:
 mark it cancelled, mark it active, correct its title/time/venue, or restore
