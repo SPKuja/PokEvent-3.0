@@ -5091,10 +5091,15 @@ class _ClaimReviewButton(discord.ui.Button):
             f"{'✅ Approved' if self.approve else '❌ Rejected'} "
             f"League **{league_id}** for server **{self.guild_id}**."
         )
-        if interaction.type == discord.InteractionType.component:
-            await interaction.response.edit_message(content=result_text, view=None)
+        if interaction.guild_id is not None and _is_pokevent_owner(interaction):
+            view = await _owner_claim_manager(
+                str(interaction.guild_id), interaction.user.id,
+            )
+            await interaction.response.edit_message(
+                content=view.content(notice=result_text), view=view,
+            )
         else:
-            await interaction.response.send_message(result_text, ephemeral=True)
+            await interaction.response.edit_message(content=result_text, view=None)
         try:
             owner = await bot.fetch_user(int(owner_id))
             await owner.send(
