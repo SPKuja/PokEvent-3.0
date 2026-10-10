@@ -5492,8 +5492,8 @@ class OwnerClaimManagerView(discord.ui.View):
                 "",
                 f"**Discord server:** {server} ({selected.guild_id})",
                 f"**Server owner:** <@{selected.owner_user_id}>",
-                f"**League:** {settings.leagues.get(selected.league_id, selected.league_id)} "
-                f"({selected.league_id})",
+                (f"**League:** {settings.leagues.get(selected.league_id, selected.league_id)} "
+                 f"({selected.league_id})"),
                 f"**Status:** {selected.status}",
                 "Verify actual League ownership independently before approving.",
             ])
