@@ -448,7 +448,7 @@ def _event_link_view(event: Event) -> discord.ui.View | None:
         )
 
     if (
-        event.status == "active"
+        event.status not in {"cancelled", "unlisted"}
         and registration_url
         and registration_url != official_url
     ):
@@ -1119,7 +1119,7 @@ def _summary_event_line(event: Event) -> str:
         title = f"{title[:79]}..."
 
     official_url = _official_event_url(event)
-    if official_url:
+    if official_url and len(official_url) <= 600:
         title = f"[{title}]({official_url})"
 
     bits = [
@@ -1167,15 +1167,28 @@ def _summary_embed(
     for league in ordered[:25]:
         rows = events_by_league.get(league.league_id, [])
         if rows:
-            visible = rows[:8]
-            value = "\n".join(_summary_event_line(event) for event in visible)
-            if len(rows) > len(visible):
-                value += f"\n-# +{len(rows) - len(visible)} more — use /events"
+            # Never cut a Discord Markdown link in half at the 1024-char limit.
+            lines: list[str] = []
+            for event in rows[:8]:
+                event_line = _summary_event_line(event)
+                if len("\n".join([*lines, event_line])) > 1024:
+                    break
+                lines.append(event_line)
+
+            remaining = len(rows) - len(lines)
+            if remaining:
+                more = f"-# +{remaining} more — use /events"
+                while lines and len("\n".join([*lines, more])) > 1024:
+                    lines.pop()
+                    remaining = len(rows) - len(lines)
+                    more = f"-# +{remaining} more — use /events"
+                lines.append(more)
+            value = "\n".join(lines)
         else:
             value = "-# No upcoming events currently listed."
 
         label = f"⭐ {league.name}" if league.league_id == default_league_id else league.name
-        embed.add_field(name=label[:256], value=value[:1024], inline=False)
+        embed.add_field(name=label[:256], value=value, inline=False)
 
     if len(ordered) > 25:
         embed.description = (

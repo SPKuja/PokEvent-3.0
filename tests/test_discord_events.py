@@ -447,3 +447,28 @@ def test_unlisted_event_gets_distinct_update_notification() -> None:
     before = _event_snapshot(event)
     event.status = "unlisted"
     assert "not a confirmed cancellation" in _event_update_notice(before, event)
+
+
+def test_long_event_summary_does_not_cut_a_markdown_link_in_half() -> None:
+    league = GuildLeague(
+        guild_id="guild-1",
+        name="Pokémon League Swindon",
+        name_key="swindon",
+        league_id="2012924",
+        origin="service",
+    )
+    events = []
+    for number in range(12):
+        event = _event(number)
+        event.title = f"Very long friendly tournament {number} " + "A" * 40
+        event.upstream_organisation_id = "2012924"
+        event.source_url = (
+            "https://www.pokemon.com/play-pokemon-tournaments/"
+            + str(number) + "/" + "test" * 35
+        )
+        events.append(event)
+    embed = _summary_embed([league], events, "2012924")
+    value = embed.fields[0].value
+    assert len(value) <= 1024
+    assert "more — use /events" in value
+    assert value.count("](") == value.count(")")
