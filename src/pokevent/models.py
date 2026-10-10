@@ -10,6 +10,8 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    Index,
+    text,
     String,
     Text,
     UniqueConstraint,
@@ -91,6 +93,50 @@ class Event(Base):
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+class LeagueClaim(Base):
+    """Only an approved claim grants editing rights to a Discord server."""
+
+    __tablename__ = "league_claims"
+    __table_args__ = (
+        Index(
+            "uq_approved_claim_league",
+            "league_id",
+            unique=True,
+            postgresql_where=text("status = 'approved'"),
+            sqlite_where=text("status = 'approved'"),
+        ),
+    )
+
+    guild_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    league_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="invited")
+    owner_user_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reviewed_by_user_id: Mapped[str | None] = mapped_column(String(32))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class ManualEventOverride(Base):
+    """Event fields explicitly corrected by the verified league's server admins."""
+
+    __tablename__ = "manual_event_overrides"
+
+    event_id: Mapped[str] = mapped_column(
+        ForeignKey("events.id", ondelete="CASCADE"), primary_key=True
+    )
+    league_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    status: Mapped[str | None] = mapped_column(String(32))
+    title: Mapped[str | None] = mapped_column(String(500))
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    venue_name: Mapped[str | None] = mapped_column(String(255))
+    updated_by_user_id: Mapped[str] = mapped_column(String(32), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
