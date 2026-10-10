@@ -5178,115 +5178,344 @@ async def _send_existing_claim_invitations(
             log.exception("failed League claim invitation guild=%s", guild.id)
 
 
-@pokevent.command(name="claim", description="Claim this server's default Pokémon League.")
-@app_commands.guild_only()
-async def pokevent_claim(interaction: discord.Interaction) -> None:
-    if interaction.guild is None or interaction.guild.owner_id != interaction.user.id:
-        await _send_error(interaction, "Only this Discord server's owner can claim its League.")
+
+# Claim controls live within /pokevent setup; no extra slash commands are needed.
+
+
+async def _open_guild_claims(
+    interaction: discord.Interaction, guild_id: str,
+) -> None:
+    guild = interaction.guild
+    if (
+        guild is None or str(guild.id) != guild_id
+        or guild.owner_id != interaction.user.id
+    ):
+        await _send_error(interaction, "Only the server owner can claim its League.")
         return
     if not settings.owner_user_id:
-        await _send_error(interaction, "The PokEvent owner has not enabled claim approvals yet.")
+        await _send_error(interaction, "League claim approvals have not been configured.")
         return
+
     async with SessionFactory() as session:
-        config = await ensure_guild_config(session, str(interaction.guild.id))
+        config = await ensure_guild_config(session, guild_id)
         league_id = config.default_league_id
-        claim = await session.get(LeagueClaim, str(interaction.guild.id))
-        await session.commit()
-        if claim and claim.status in {"pending", "approved"}:
-            await _send_error(
-                interaction, f"Claim status: **{claim.status}** for League {claim.league_id}."
-            )
-            return
-        if claim and claim.status == "rejected" and claim.league_id == league_id:
-            await _send_error(interaction, "That claim was rejected. Contact the PokEvent owner.")
-            return
+        claim = await session.get(LeagueClaim, guild_id)
         if not league_id:
-            await _send_error(interaction, "Set a default League with /pokevent setup first.")
+            await _send_error(interaction, "Set a default League before claiming it.")
             return
-        other = await approved_for_league(session, league_id)
-        if other is not None and other.guild_id != str(interaction.guild.id):
-            await _send_error(interaction, "That League is already verified to another server.")
-            return
-    await interaction.response.send_message(
-        _claim_invitation_text(
-            interaction.guild, settings.leagues.get(league_id, league_id)
+        already_claimed = await approved_for_league(session, league_id)
+    if claim is not None and claim.status == "approved":
+        view = GuildClaimReleaseView(guild_id)
+        await interaction.response.edit_message(
+            content=(
+                "## Verified League ownership\n"
+                f"This server is verified for League **{claim.league_id}**. "
+                "All server administrators can manage its events.\n\n"
+                "If this server no longer owns the League, you can release "
+                "the claim below. Event editing will be disabled."
+            ),
+            view=view,
+        )
+        return
+
+    if claim is not None and claim.status == "pending":
+        await interaction.response.edit_message(
+            content="Your League claim is awaiting PokEvent owner approval.",
+            view=SetupReturnView(interaction.user.id, guild_id),
+        )
+        return
+
+    if claim is not None and claim.status == "rejected" and claim.league_id == league_id:
+        await interaction.response.edit_message(
+            content="This League claim was rejected. Contact the PokEvent owner to appeal.",
+            view=SetupReturnView(interaction.user.id, guild_id),
+        )
+        return
+
+    if already_claimed is not None and already_claimed.guild_id != guild_id:
+        await interaction.response.edit_message(
+            content="That League is already verified to another Discord server.",
+            view=SetupReturnView(interaction.user.id, guild_id),
+        )
+        return
+
+    await interaction.response.edit_message(
+        content=_claim_invitation_text(
+            guild, settings.leagues.get(league_id, league_id),
         ),
-        view=LeagueClaimInviteView(str(interaction.guild.id)),
-        ephemeral=True,
+        view=LeagueClaimInviteView(guild_id),
     )
 
 
-@pokevent.command(name="claims", description="List pending League claims (PokEvent owner only).")
-@app_commands.guild_only()
-async def pokevent_claims(interaction: discord.Interaction) -> None:
-    if not _is_pokevent_owner(interaction):
-        await _send_error(interaction, "Only the PokEvent owner can review requests.")
-        return
+class SetupReturnButton(discord.ui.Button):
+    def __init__(self, view: SetupReturnView) -> None:
+        super().__init__(label="Back to Setup", row=0)
+        self.return_view = view
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await self.return_view.interaction_check(interaction):
+            return
+        next_view = SetupDashboardView(
+            invoker_id=self.return_view.invoker_id,
+            guild_id=self.return_view.guild_id,
+        )
+        await interaction.response.edit_message(
+            content=await _setup_dashboard_content(self.return_view.guild_id),
+            view=next_view,
+        )
+
+
+class SetupReturnView(discord.ui.View):
+    def __init__(self, invoker_id: int, guild_id: str) -> None:
+        super().__init__(timeout=600)
+        self.invoker_id = invoker_id
+        self.guild_id = guild_id
+        self.add_item(SetupReturnButton(self))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        allowed = (
+            interaction.user.id == self.invoker_id
+            and interaction.guild_id is not None
+            and str(interaction.guild_id) == self.guild_id
+        )
+        if not allowed:
+            await _send_error(interaction, "This is another user's setup menu.")
+        return allowed
+
+
+class _GuildClaimReleaseButton(discord.ui.Button):
+    def __init__(self, view: GuildClaimReleaseView, release: bool) -> None:
+        super().__init__(
+            label="Release this League" if release else "Back to Setup",
+            style=discord.ButtonStyle.danger if release else discord.ButtonStyle.secondary,
+        )
+        self.release = release
+        self.claim_view = view
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        if (
+            guild is None or str(guild.id) != self.claim_view.guild_id
+            or guild.owner_id != interaction.user.id
+        ):
+            await _send_error(interaction, "Only this Discord server's owner can release its League.")
+            return
+        notice = ""
+        if self.release:
+            async with SessionFactory() as session:
+                claim = await release_claim(session, str(guild.id))
+                await session.commit()
+            notice = (
+                f"Released League **{claim.league_id}**. Editing is now disabled."
+                if claim else "This server doesn't have an active claim."
+            )
+        next_view = SetupDashboardView(
+            invoker_id=interaction.user.id, guild_id=str(guild.id),
+        )
+        await interaction.response.edit_message(
+            content=await _setup_dashboard_content(str(guild.id), notice=notice),
+            view=next_view,
+        )
+
+
+class GuildClaimReleaseView(discord.ui.View):
+    def __init__(self, guild_id: str) -> None:
+        super().__init__(timeout=600)
+        self.guild_id = guild_id
+        self.add_item(_GuildClaimReleaseButton(self, True))
+        self.add_item(_GuildClaimReleaseButton(self, False))
+
+
+async def _owner_claim_manager(
+    guild_id: str, invoker_id: int,
+) -> OwnerClaimManagerView:
     async with SessionFactory() as session:
-        pending = (await session.scalars(
-            select(LeagueClaim).where(LeagueClaim.status == "pending")
-            .order_by(LeagueClaim.requested_at)
+        rows = (await session.scalars(
+            select(LeagueClaim)
+            .where(LeagueClaim.status.in_(("pending", "approved", "rejected")))
+            .order_by(LeagueClaim.updated_at.desc())
         )).all()
-    if not pending:
-        await interaction.response.send_message("No pending League claims.", ephemeral=True)
-        return
-    lines = [
-        f"• Guild **{c.guild_id}** · League **{c.league_id}** · owner <@{c.owner_user_id}>"
-        for c in pending[:20]
-    ]
-    await interaction.response.send_message(
-        "## Pending League claims\n" + "\n".join(lines) +
-        "\n\nUse **/pokevent reviewclaim** with the Guild ID to approve or reject.",
-        ephemeral=True,
+    # Pending requests first; keep the 25-option Discord select limit.
+    rows.sort(key=lambda row: (row.status != "pending", row.status != "approved"))
+    return OwnerClaimManagerView(
+        guild_id=guild_id, invoker_id=invoker_id, claims=rows[:25],
     )
 
 
-@pokevent.command(name="reviewclaim", description="Approve or reject a League claim (owner only).")
-@app_commands.guild_only()
-async def pokevent_reviewclaim(
-    interaction: discord.Interaction, guild_id: str, approve: bool,
-) -> None:
-    if not _is_pokevent_owner(interaction):
-        await _send_error(interaction, "Only the PokEvent owner can review claims.")
-        return
-    view = LeagueClaimReviewView(guild_id)
-    await view.children[0 if approve else 1].callback(interaction)
-
-
-@pokevent.command(name="unclaim", description="Release this server's verified League.")
-@app_commands.guild_only()
-async def pokevent_unclaim(interaction: discord.Interaction) -> None:
-    if interaction.guild is None or interaction.guild.owner_id != interaction.user.id:
-        await _send_error(interaction, "Only the server owner can release the League.")
-        return
-    async with SessionFactory() as session:
-        claim = await release_claim(session, str(interaction.guild.id))
-        await session.commit()
-    await interaction.response.send_message(
-        (
-            f"Released League **{claim.league_id}**. Editing is now disabled."
-            if claim else "This server has no active League claim."
-        ),
-        ephemeral=True,
-    )
-
-
-@pokevent.command(name="releaseclaim", description="Revoke a server's claim (PokEvent owner).")
-@app_commands.guild_only()
-async def pokevent_releaseclaim(
+async def _open_owner_claims(
     interaction: discord.Interaction, guild_id: str,
 ) -> None:
     if not _is_pokevent_owner(interaction):
-        await _send_error(interaction, "Only the PokEvent owner can revoke a claim.")
+        await _send_error(interaction, "Only the PokEvent owner can review League claims.")
         return
-    async with SessionFactory() as session:
-        claim = await release_claim(session, guild_id, force=True)
-        await session.commit()
-    await interaction.response.send_message(
-        f"Released League **{claim.league_id}** from server **{guild_id}**."
-        if claim else "No active claim for that server.",
-        ephemeral=True,
-    )
+    view = await _owner_claim_manager(guild_id, interaction.user.id)
+    await interaction.response.edit_message(content=view.content(), view=view)
+
+
+class OwnerClaimSelect(discord.ui.Select):
+    def __init__(self, manager: OwnerClaimManagerView) -> None:
+        self.manager = manager
+        options = []
+        for claim in manager.claims:
+            guild = bot.get_guild(int(claim.guild_id))
+            server_name = guild.name if guild is not None else claim.guild_id
+            options.append(discord.SelectOption(
+                label=server_name[:100],
+                value=claim.guild_id,
+                description=f"{claim.status.upper()} · League {claim.league_id}"[:100],
+                default=claim.guild_id == manager.selected_guild_id,
+            ))
+        super().__init__(
+            placeholder="Select a Discord server claim",
+            options=options,
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await self.manager.interaction_check(interaction):
+            return
+        self.manager.selected_guild_id = self.values[0]
+        self.manager.rebuild()
+        await interaction.response.edit_message(
+            content=self.manager.content(), view=self.manager,
+        )
+
+
+class OwnerClaimButton(discord.ui.Button):
+    def __init__(
+        self, manager: OwnerClaimManagerView,
+        action: str, label: str,
+        style: discord.ButtonStyle = discord.ButtonStyle.secondary,
+        row: int = 1,
+    ) -> None:
+        super().__init__(label=label, style=style, row=row)
+        self.manager = manager
+        self.action = action
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await self.manager.interaction_check(interaction):
+            return
+        if self.action == "back":
+            view = SetupDashboardView(
+                invoker_id=interaction.user.id, guild_id=self.manager.guild_id,
+            )
+            await interaction.response.edit_message(
+                content=await _setup_dashboard_content(self.manager.guild_id),
+                view=view,
+            )
+            return
+        if self.action == "refresh":
+            view = await _owner_claim_manager(self.manager.guild_id, interaction.user.id)
+            await interaction.response.edit_message(content=view.content(), view=view)
+            return
+
+        selected = self.manager.selected()
+        if selected is None:
+            await _send_error(interaction, "No League claim is selected.")
+            return
+        if self.action in {"approve", "reject"}:
+            if selected.status != "pending":
+                await _send_error(interaction, "Only pending claims can be reviewed.")
+                return
+            view = LeagueClaimReviewView(selected.guild_id)
+            await view.children[0 if self.action == "approve" else 1].callback(interaction)
+            return
+        if self.action == "release":
+            if selected.status not in {"approved", "rejected"}:
+                await _send_error(interaction, "Only approved or rejected claims can be released.")
+                return
+            async with SessionFactory() as session:
+                released = await release_claim(
+                    session, selected.guild_id, force=True,
+                )
+                await session.commit()
+            view = await _owner_claim_manager(self.manager.guild_id, interaction.user.id)
+            await interaction.response.edit_message(
+                content=view.content(
+                    notice=(
+                        f"Released League {released.league_id} from server "
+                        f"{released.guild_id}." if released
+                        else "The claim was already released."
+                    )
+                ),
+                view=view,
+            )
+
+
+class OwnerClaimManagerView(discord.ui.View):
+    def __init__(
+        self, guild_id: str, invoker_id: int, claims: list[LeagueClaim],
+    ) -> None:
+        super().__init__(timeout=600)
+        self.guild_id = guild_id
+        self.invoker_id = invoker_id
+        self.claims = claims
+        self.selected_guild_id = claims[0].guild_id if claims else None
+        self.rebuild()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        allowed = (
+            _is_pokevent_owner(interaction)
+            and interaction.user.id == self.invoker_id
+            and interaction.guild_id is not None
+            and str(interaction.guild_id) == self.guild_id
+        )
+        if not allowed:
+            await _send_error(interaction, "Only the PokEvent owner can use this menu.")
+        return bool(allowed)
+
+    def selected(self) -> LeagueClaim | None:
+        return next(
+            (claim for claim in self.claims
+             if claim.guild_id == self.selected_guild_id),
+            None,
+        )
+
+    def content(self, notice: str | None = None) -> str:
+        pending = sum(claim.status == "pending" for claim in self.claims)
+        verified = sum(claim.status == "approved" for claim in self.claims)
+        lines = [
+            "## 🛡️ PokEvent · League Claims",
+            f"**Awaiting review:** {pending} · **Verified:** {verified}",
+            "Only you can approve, reject or release League claims.",
+        ]
+        selected = self.selected()
+        if selected is not None:
+            guild = bot.get_guild(int(selected.guild_id))
+            server = guild.name if guild else selected.guild_id
+            lines.extend([
+                "",
+                f"**Discord server:** {server} ({selected.guild_id})",
+                f"**Server owner:** <@{selected.owner_user_id}>",
+                f"**League:** {settings.leagues.get(selected.league_id, selected.league_id)} "
+                f"({selected.league_id})",
+                f"**Status:** {selected.status}",
+                "Verify actual League ownership independently before approving.",
+            ])
+        else:
+            lines.append("No pending or verified claims.")
+        if notice:
+            lines.extend(["", f"**{notice}**"])
+        return "\n".join(lines)
+
+    def rebuild(self) -> None:
+        self.clear_items()
+        selected = self.selected()
+        if self.claims:
+            self.add_item(OwnerClaimSelect(self))
+        if selected is not None and selected.status == "pending":
+            self.add_item(OwnerClaimButton(
+                self, "approve", "Approve", discord.ButtonStyle.success,
+            ))
+            self.add_item(OwnerClaimButton(
+                self, "reject", "Reject", discord.ButtonStyle.danger,
+            ))
+        if selected is not None and selected.status in {"approved", "rejected"}:
+            self.add_item(OwnerClaimButton(
+                self, "release", "Release Claim", discord.ButtonStyle.danger,
+            ))
+        self.add_item(OwnerClaimButton(self, "refresh", "Refresh", row=2))
+        self.add_item(OwnerClaimButton(self, "back", "Back to Setup", row=2))
 
 
 @bot.tree.error
