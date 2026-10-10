@@ -4888,7 +4888,9 @@ class LeagueEventManagerView(discord.ui.View):
         try:
             async with SessionFactory() as session:
                 if action == "reset":
-                    removed = await remove_override(session, self.guild_id, event_id)
+                    removed = await remove_override(
+                        session, self.guild_id, event_id, str(interaction.user.id)
+                    )
                 else:
                     await change_event(
                         session, self.guild_id, event_id,
