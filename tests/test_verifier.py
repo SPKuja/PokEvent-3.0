@@ -62,13 +62,13 @@ async def test_verifier_corrects_cancelled_event_and_override_survives_sync() ->
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
-        args = dict(
-            feed_url="https://approved.example/leagues/{league_id}/events",
-            token=None,
-            league_ids={"2012924"},
-            client=client,
-            now=now,
-        )
+        args = {
+            "feed_url": "https://approved.example/leagues/{league_id}/events",
+            "token": None,
+            "league_ids": {"2012924"},
+            "client": client,
+            "now": now,
+        }
         assert await run_daily_verification(sessions, **args) == (1, 1)
         assert await run_daily_verification(
             sessions, **(args | {"now": now + timedelta(hours=23)})
@@ -125,12 +125,12 @@ async def test_verifier_updates_fields_and_restores_reactivated_event() -> None:
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
-        args = dict(
-            feed_url="https://approved.example/leagues/{league_id}/events",
-            token="secret",
-            league_ids={"2012924"},
-            client=client,
-        )
+        args = {
+            "feed_url": "https://approved.example/leagues/{league_id}/events",
+            "token": "secret",
+            "league_ids": {"2012924"},
+            "client": client,
+        }
         assert await run_daily_verification(sessions, **(args | {"now": now})) == (1, 1)
         async with sessions() as session:
             confirmed = (await apply_verified_snapshots(session, [snapshot()]))[0]
