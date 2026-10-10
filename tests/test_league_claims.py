@@ -1,7 +1,9 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
+
+from pokevent.catalogue import reconcile_missing_events
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from pokevent.catalogue import upsert_snapshots
@@ -18,7 +20,9 @@ from pokevent.league_claims import (
     request_claim,
     review_claim,
 )
-from pokevent.models import Base, Event, GuildConfig, LeagueClaim, ManualEventOverride
+from pokevent.models import (
+    Base, Event, EventEditAudit, GuildConfig, LeagueClaim, ManualEventOverride,
+)
 
 SWINDON = "2012924"
 BATH = "5683200"
@@ -127,6 +131,11 @@ async def test_manual_override_is_league_scoped_and_survives_pokedata(sessions) 
         )
         await session.commit()
         assert (await session.get(ManualEventOverride, event.id)).status == "cancelled"
+        audit_rows = (await session.scalars(select(EventEditAudit))).all()
+        assert len(audit_rows) == 1
+        assert audit_rows[0].user_id == "admin-a"
+        assert audit_rows[0].before["status"] == "active"
+        assert audit_rows[0].after["status"] == "cancelled"
 
         corrected = (await apply_manual_snapshots(session, [snapshot]))[0]
         assert corrected.status == "cancelled"
@@ -136,6 +145,8 @@ async def test_manual_override_is_league_scoped_and_survives_pokedata(sessions) 
 
         assert await remove_override(session, "guild-a", event.id, "admin-a")
         await session.commit()
+        audit_rows = (await session.scalars(select(EventEditAudit))).all()
+        assert {entry.action for entry in audit_rows} == {"edit", "restore_pokedata"}
         restored = (await apply_manual_snapshots(session, [snapshot]))[0]
         assert restored.status == "active"
         await upsert_snapshots(session, [restored])
@@ -151,3 +162,26 @@ async def test_unclaimed_server_cannot_edit_any_event(sessions) -> None:
         event = await session.get(Event, await session.scalar(select(Event.id)))
         with pytest.raises(ValueError, match="not verified"):
             await owned_event(session, "guild-a", event.id)
+
+
+@pytest.mark.asyncio
+async def test_manually_active_event_is_not_marked_unlisted(sessions) -> None:
+    snapshot = swindon_event()
+    async with sessions() as session:
+        session.add(GuildConfig(guild_id="guild-a", default_league_id=SWINDON))
+        await session.commit()
+        await request_claim(session, "guild-a", "owner-a")
+        await review_claim(session, "guild-a", "pokevent-owner", True)
+        await session.commit()
+        await upsert_snapshots(session, [snapshot])
+        event = await session.get(Event, await session.scalar(select(Event.id)))
+        await change_event(session, "guild-a", event.id, "admin-a", status="active")
+        await session.commit()
+        start = snapshot.starts_at - timedelta(hours=1)
+        end = snapshot.starts_at + timedelta(hours=24)
+        result = await reconcile_missing_events(
+            session, source="pokedata", raw_event_ids={"another-id"},
+            window_start=start, window_end=end, country_code="GB",
+        )
+        assert result == (0, 0)
+        assert event.status == "active"
