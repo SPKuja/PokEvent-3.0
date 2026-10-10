@@ -136,6 +136,7 @@ class ManualEventOverride(Base):
     title: Mapped[str | None] = mapped_column(String(500))
     starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     venue_name: Mapped[str | None] = mapped_column(String(255))
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_by_user_id: Mapped[str] = mapped_column(String(32), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
