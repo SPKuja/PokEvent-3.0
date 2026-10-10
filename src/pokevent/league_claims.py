@@ -102,7 +102,16 @@ async def decline_invitation(
     session: AsyncSession, guild_id: str, owner_id: str,
 ) -> None:
     claim = await session.get(LeagueClaim, guild_id)
-    if claim is None or claim.status != "invited" or claim.owner_user_id != owner_id:
+    if claim is None:
+        config = await session.get(GuildConfig, guild_id)
+        if config is None or not config.default_league_id:
+            raise ValueError("There is no League to decline.")
+        claim = LeagueClaim(
+            guild_id=guild_id, league_id=config.default_league_id,
+            owner_user_id=owner_id, status="declined",
+        )
+        session.add(claim)
+    elif claim.status not in {"invited", "delivery_failed", "declined"} or claim.owner_user_id != owner_id:
         raise ValueError("There is no current invitation for this server.")
     claim.status = "declined"
     await session.flush()
@@ -197,7 +206,13 @@ async def change_event(
         raise ValueError("Event League does not match its existing override.")
 
     if "starts_at" in changes and event.ends_at is not None:
-        event.ends_at += changes["starts_at"] - event.starts_at
+        old_start = event.starts_at
+        old_end = event.ends_at
+        if old_start.tzinfo is None:
+            old_start = old_start.replace(tzinfo=UTC)
+        if old_end.tzinfo is None:
+            old_end = old_end.replace(tzinfo=UTC)
+        event.ends_at = old_end + (changes["starts_at"] - old_start)
         override.ends_at = event.ends_at
 
     for name, value in changes.items():
