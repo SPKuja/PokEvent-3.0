@@ -142,6 +142,25 @@ class ManualEventOverride(Base):
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
 
+class EventEditAudit(Base):
+    """Append-only record of every manual event correction and reset."""
+
+    __tablename__ = "event_edit_audit"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    event_id: Mapped[str] = mapped_column(
+        ForeignKey("events.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    guild_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    league_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    before: Mapped[dict | None] = mapped_column(JSON)
+    after: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+
 
 class VerificationRecord(Base):
     """Explicitly verified corrections independent of Pokédata's cache."""
