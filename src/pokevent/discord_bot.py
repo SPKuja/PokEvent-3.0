@@ -1938,8 +1938,15 @@ async def _setup_dashboard_content(
     if len(leagues) > 6:
         league_names += f" +{len(leagues) - 6} more"
 
+    async with SessionFactory() as session:
+        ownership = await session.get(LeagueClaim, guild_id)
+    ownership_label = (
+        f"{ownership.status.capitalize()} · League {ownership.league_id}"
+        if ownership else "Unclaimed · /pokevent claim for the server owner"
+    )
     lines = [
         "## ⚙️ PokÈvent Admin",
+        f"**League ownership:** {ownership_label}",
         f"**Status:** {status}",
         f"**Default League:** {default_name}",
         f"**Default channel:** {default_channel}",
@@ -2077,6 +2084,7 @@ class SetupDashboardView(discord.ui.View):
         self.add_item(SetupDashboardButton(self, "welcomes", "Welcomes", row=1))
         self.add_item(SetupDashboardButton(self, "refresh", "Refresh Summary", row=1))
         self.add_item(SetupDashboardButton(self, "close", "Close", row=1))
+        self.add_item(SetupDashboardButton(self, "eventmanage", "Manage Events", row=2))
         self.add_item(
             SetupDashboardButton(
                 self,
@@ -2101,6 +2109,9 @@ class SetupDashboardView(discord.ui.View):
         interaction: discord.Interaction,
         action: str,
     ) -> None:
+        if action == "eventmanage":
+            await _open_league_event_manager(interaction, self.guild_id)
+            return
         if action == "add":
             await interaction.response.send_modal(
                 AddLeagueModal(
@@ -4613,6 +4624,324 @@ async def eventchannel_clear_autocomplete(
 ) -> list[app_commands.Choice[str]]:
     return await _channel_target_autocomplete(interaction, current)
 
+
+
+
+# ===== League-scoped manual event management =====
+
+async def _event_manager_for_server(
+    guild_id: str, invoker_id: int,
+) -> LeagueEventManagerView:
+    async with SessionFactory() as session:
+        claim = await session.get(LeagueClaim, guild_id)
+        if claim is None or claim.status != "approved":
+            raise ValueError(
+                "This Discord server doesn't own a verified League yet. "
+                "Ask the server owner to use /pokevent claim."
+            )
+        rows = list((await session.scalars(
+            select(Event).where(
+                Event.upstream_organisation_id == claim.league_id,
+                Event.source != "community",
+                Event.starts_at >= datetime.now(UTC) - timedelta(days=7),
+            ).order_by(Event.starts_at).limit(25)
+        )).all())
+        if not rows:
+            raise ValueError("No current or upcoming events found for the verified League.")
+        return LeagueEventManagerView(
+            guild_id=guild_id, invoker_id=invoker_id,
+            league_id=claim.league_id, events=rows,
+        )
+
+
+async def _open_league_event_manager(
+    interaction: discord.Interaction, guild_id: str,
+) -> None:
+    if (
+        interaction.guild_id is None
+        or str(interaction.guild_id) != guild_id
+        or not isinstance(interaction.user, discord.Member)
+        or not interaction.user.guild_permissions.administrator
+    ):
+        await _send_error(interaction, "Only this server's administrators can edit events.")
+        return
+    try:
+        view = await _event_manager_for_server(guild_id, interaction.user.id)
+    except ValueError as exc:
+        await _send_error(interaction, str(exc))
+        return
+    if interaction.message is not None:
+        await interaction.response.edit_message(content=view.content(), view=view)
+    else:
+        await interaction.response.send_message(
+            content=view.content(), view=view, ephemeral=True,
+        )
+
+
+async def _refresh_corrected_event(league_id: str) -> None:
+    await publish_event_routes_once()
+    async with SessionFactory() as session:
+        guilds = set((await session.scalars(
+            select(Route.guild_id).where(Route.upstream_organisation_id == league_id)
+        )).all())
+    for guild_id in guilds:
+        await refresh_guild_summary_messages(guild_id)
+
+
+class _LeagueEventSelect(discord.ui.Select):
+    def __init__(self, manager: LeagueEventManagerView) -> None:
+        self.manager = manager
+        super().__init__(
+            placeholder="Select an event to manage",
+            min_values=1,
+            max_values=1,
+            row=0,
+            options=[
+                discord.SelectOption(
+                    label=event.title[:100],
+                    description=(
+                        f"{event.starts_at.strftime('%d %b %Y')} · "
+                        f"{event.status}"
+                    )[:100],
+                    value=event.id,
+                    default=event.id == manager.selected_id,
+                )
+                for event in manager.events
+            ],
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        self.manager.selected_id = self.values[0]
+        self.manager.rebuild()
+        await interaction.response.edit_message(
+            content=self.manager.content(), view=self.manager
+        )
+
+
+class _LeagueEventButton(discord.ui.Button):
+    def __init__(
+        self, manager: LeagueEventManagerView, action: str, label: str,
+        style: discord.ButtonStyle = discord.ButtonStyle.secondary,
+        row: int = 1,
+    ) -> None:
+        self.manager = manager
+        self.action = action
+        super().__init__(label=label, style=style, row=row)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self.manager.action(interaction, self.action)
+
+
+class LeagueEventEditModal(discord.ui.Modal, title="Edit League event"):
+    def __init__(self, manager: LeagueEventManagerView, event: Event) -> None:
+        super().__init__()
+        self.manager = manager
+        self.event_id = event.id
+        self.title_input = discord.ui.TextInput(
+            default=event.title, max_length=500,
+        )
+        self.venue_input = discord.ui.TextInput(
+            default=event.venue_name or "", max_length=255,
+        )
+        local = event.starts_at.replace(tzinfo=UTC) if event.starts_at.tzinfo is None else event.starts_at
+        self.start_input = discord.ui.TextInput(
+            default=local.astimezone(
+                ZoneInfo(settings.local_timezone)
+            ).strftime("%Y-%m-%d %H:%M"),
+            placeholder="2026-10-18 11:00",
+            max_length=16,
+        )
+        self.add_item(discord.ui.Label(text="Event title", component=self.title_input))
+        self.add_item(discord.ui.Label(text="Venue name", component=self.venue_input))
+        self.add_item(discord.ui.Label(
+            text="Start time (UK local)", component=self.start_input,
+        ))
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not await self.manager.interaction_check(interaction):
+            return
+        try:
+            local = datetime.strptime(
+                self.start_input.value.strip(), "%Y-%m-%d %H:%M",
+            ).replace(tzinfo=ZoneInfo(settings.local_timezone))
+            start = local.astimezone(UTC)
+            async with SessionFactory() as session:
+                await change_event(
+                    session, self.manager.guild_id, self.event_id,
+                    str(interaction.user.id),
+                    title=self.title_input.value.strip(),
+                    venue_name=self.venue_input.value.strip(),
+                    starts_at=start,
+                )
+                await session.commit()
+        except (ValueError, OverflowError) as exc:
+            await _send_error(interaction, str(exc))
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await _refresh_corrected_event(self.manager.league_id)
+            await interaction.followup.send(
+                "✅ Event details saved. Pokédata will not overwrite these fields. "
+                "Announcements are being refreshed.",
+                ephemeral=True,
+            )
+        except Exception:
+            log.exception("failed to republish manually edited event")
+            await interaction.followup.send(
+                "Saved, but the Discord update failed. The bot will retry automatically.",
+                ephemeral=True,
+            )
+
+
+class LeagueEventManagerView(discord.ui.View):
+    def __init__(
+        self, guild_id: str, invoker_id: int,
+        league_id: str, events: list[Event],
+    ) -> None:
+        super().__init__(timeout=600)
+        self.guild_id = guild_id
+        self.invoker_id = invoker_id
+        self.league_id = league_id
+        self.events = events
+        self.selected_id = events[0].id
+        self.rebuild()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        allowed = (
+            interaction.guild_id is not None
+            and str(interaction.guild_id) == self.guild_id
+            and interaction.user.id == self.invoker_id
+            and isinstance(interaction.user, discord.Member)
+            and interaction.user.guild_permissions.administrator
+        )
+        if not allowed:
+            await _send_error(
+                interaction, "Only the administrator who opened this panel can use it."
+            )
+        return bool(allowed)
+
+    def selected(self) -> Event:
+        return next(event for event in self.events if event.id == self.selected_id)
+
+    def content(self, notice: str | None = None) -> str:
+        event = self.selected()
+        lines = [
+            "## 🛠️ Manage verified League events",
+            f"**League:** {settings.leagues.get(self.league_id, self.league_id)}",
+            f"**Event:** {event.title}",
+            f"**Date:** {discord.utils.format_dt(event.starts_at, style='F')}",
+            f"**Venue:** {event.venue_name or 'Unknown'}",
+            f"**Status:** {event.status}",
+            "",
+            "Changes are permanent overrides of Pokédata, visible across "
+            "every server following this League.",
+            "Restore from Pokédata removes all manual corrections for this event.",
+        ]
+        if notice:
+            lines.extend(["", f"**{notice}**"])
+        return "\n".join(lines)
+
+    def rebuild(self) -> None:
+        self.clear_items()
+        self.add_item(_LeagueEventSelect(self))
+        self.add_item(_LeagueEventButton(
+            self, "cancel", "Mark Cancelled",
+            discord.ButtonStyle.danger,
+        ))
+        self.add_item(_LeagueEventButton(
+            self, "active", "Mark Active",
+            discord.ButtonStyle.success,
+        ))
+        self.add_item(_LeagueEventButton(
+            self, "edit", "Edit Details", discord.ButtonStyle.primary,
+        ))
+        self.add_item(_LeagueEventButton(
+            self, "reset", "Restore Pokédata", row=2,
+        ))
+        self.add_item(_LeagueEventButton(self, "back", "Back", row=2))
+
+    async def action(
+        self, interaction: discord.Interaction, action: str,
+    ) -> None:
+        if action == "back":
+            view = SetupDashboardView(
+                invoker_id=self.invoker_id, guild_id=self.guild_id,
+            )
+            await interaction.response.edit_message(
+                content=await _setup_dashboard_content(self.guild_id), view=view,
+            )
+            return
+
+        event_id = self.selected_id
+        if action == "edit":
+            async with SessionFactory() as session:
+                try:
+                    event = await owned_event(session, self.guild_id, event_id)
+                except ValueError as exc:
+                    await _send_error(interaction, str(exc))
+                    return
+                await interaction.response.send_modal(LeagueEventEditModal(self, event))
+            return
+        if action not in {"cancel", "active", "reset"}:
+            return
+        await interaction.response.defer()
+        try:
+            async with SessionFactory() as session:
+                if action == "reset":
+                    removed = await remove_override(session, self.guild_id, event_id)
+                else:
+                    await change_event(
+                        session, self.guild_id, event_id,
+                        str(interaction.user.id),
+                        status="cancelled" if action == "cancel" else "active",
+                    )
+                    removed = False
+                await session.commit()
+
+            notice = "Correction saved."
+            if action == "reset":
+                if removed:
+                    try:
+                        await sync_once()
+                        notice = "Manual correction removed; Pokédata restored."
+                    except Exception:
+                        log.exception("sync after removing event override failed")
+                        notice = (
+                            "Correction removed. Pokédata will be restored on "
+                            "the next successful event sync."
+                        )
+                else:
+                    notice = "This event had no manual corrections."
+
+            await _refresh_corrected_event(self.league_id)
+            refreshed = await _event_manager_for_server(
+                self.guild_id, self.invoker_id,
+            )
+            self.events = refreshed.events
+            if any(event.id == event_id for event in self.events):
+                self.selected_id = event_id
+            else:
+                self.selected_id = self.events[0].id
+            self.rebuild()
+            await interaction.edit_original_response(
+                content=self.content(notice=notice), view=self,
+            )
+        except ValueError as exc:
+            await interaction.edit_original_response(content=str(exc), view=self)
+        except Exception:
+            log.exception("League event management failed")
+            await interaction.edit_original_response(
+                content="The edit failed. Please try again.", view=self,
+            )
+
+
+@pokevent.command(
+    name="manageevents", description="Manage events for this server's verified League.",
+)
+@_admin_only
+async def pokevent_manageevents(interaction: discord.Interaction) -> None:
+    assert interaction.guild_id is not None
+    await _open_league_event_manager(interaction, str(interaction.guild_id))
 
 
 # ===== Discord server ownership claims =====
