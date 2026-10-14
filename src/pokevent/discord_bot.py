@@ -159,9 +159,16 @@ async def _spam_alert(
         return
 
     result = "10-minute timeout applied" if timed_out else "No Discord timeout applied"
+    account_created = discord.utils.format_dt(member.created_at, style="R")
+    joined_server = (
+        discord.utils.format_dt(member.joined_at, style="R")
+        if member.joined_at is not None else "Unknown"
+    )
     report = (
         "### 🛡️ PokEvent Spam Protection\n"
         f"**Member:** {member.mention} (`{member.id}`)\n"
+        f"**Account created:** {account_created}\n"
+        f"**Joined this server:** {joined_server}\n"
         f"**Trigger:** {message_count} messages across {channel_count} channels in 15 seconds\n"
         f"**Removed/already gone:** {removed}/{attempted}\n"
         f"**Restriction:** {result}\n"
