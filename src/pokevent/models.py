@@ -211,6 +211,10 @@ class GuildConfig(Base):
     welcome_mode: Mapped[str | None] = mapped_column(String(16))
     welcome_channel_id: Mapped[str | None] = mapped_column(String(32))
     welcome_message: Mapped[str | None] = mapped_column(Text)
+    spam_protection_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    spam_timeout_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    spam_alerts_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    spam_alert_channel_id: Mapped[str | None] = mapped_column(String(32))
     leagues_seeded: Mapped[bool] = mapped_column(Boolean, default=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
