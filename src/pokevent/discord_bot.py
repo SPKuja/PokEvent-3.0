@@ -8,7 +8,9 @@ import logging
 import math
 import random
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from time import monotonic
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
@@ -61,6 +63,7 @@ from .models import (
     PublishedMessage,
     Route,
 )
+from .spam_protection import SpamDetector
 from .worker import sync_once
 
 settings = get_settings()
@@ -73,6 +76,175 @@ ANNOUNCEMENT_CHANNEL_TYPES = [
     discord.ChannelType.news,
 ]
 
+_spam_detector = SpamDetector()
+_spam_settings_cache: dict[int, tuple[float, _SpamGuildSettings]] = {}
+
+
+@dataclass(frozen=True)
+class _SpamGuildSettings:
+    enabled: bool = False
+    timeout_enabled: bool = True
+    alerts_enabled: bool = False
+    alerts_channel_id: str | None = None
+
+
+async def _spam_settings(guild_id: int) -> _SpamGuildSettings:
+    now = monotonic()
+    cached = _spam_settings_cache.get(guild_id)
+    if cached is not None and now - cached[0] < 30:
+        return cached[1]
+
+    async with SessionFactory() as session:
+        config = await session.get(GuildConfig, str(guild_id))
+
+    result = _SpamGuildSettings(
+        enabled=bool(config and config.spam_protection_enabled),
+        timeout_enabled=bool(config.spam_timeout_enabled) if config else True,
+        alerts_enabled=bool(config and config.spam_alerts_enabled),
+        alerts_channel_id=config.spam_alert_channel_id if config else None,
+    )
+    _spam_settings_cache[guild_id] = (now, result)
+    return result
+
+
+async def _delete_spam_messages(
+    current: discord.Message,
+    targets: tuple[tuple[int, int], ...],
+) -> tuple[int, int]:
+    removed = 0
+    for channel_id, message_id in targets:
+        try:
+            if message_id == current.id:
+                await current.delete()
+                removed += 1
+                continue
+
+            channel = current.guild.get_channel_or_thread(channel_id)
+            if channel is None:
+                channel = bot.get_channel(channel_id)
+            if channel is None:
+                channel = await bot.fetch_channel(channel_id)
+            await channel.get_partial_message(message_id).delete()
+            removed += 1
+        except discord.NotFound:
+            # Already removed by AutoMod, a human moderator, or another bot.
+            removed += 1
+        except (discord.Forbidden, discord.HTTPException, AttributeError):
+            log.warning(
+                "could not remove suspected spam guild=%s channel=%s message=%s",
+                current.guild.id,
+                channel_id,
+                message_id,
+            )
+    return removed, len(targets)
+
+
+async def _spam_alert(
+    guild: discord.Guild,
+    member: discord.Member,
+    *,
+    settings_for_guild: _SpamGuildSettings,
+    message_count: int,
+    channel_count: int,
+    removed: int,
+    attempted: int,
+    timed_out: bool,
+) -> None:
+    if not settings_for_guild.alerts_enabled or not settings_for_guild.alerts_channel_id:
+        return
+
+    channel_id = int(settings_for_guild.alerts_channel_id)
+    channel = guild.get_channel(channel_id)
+    if not isinstance(channel, discord.TextChannel):
+        return
+
+    result = "10-minute timeout applied" if timed_out else "No Discord timeout applied"
+    account_created = discord.utils.format_dt(member.created_at, style="R")
+    joined_server = (
+        discord.utils.format_dt(member.joined_at, style="R")
+        if member.joined_at is not None else "Unknown"
+    )
+    report = (
+        "### 🛡️ PokEvent Spam Protection\n"
+        f"**Member:** {member.mention} (`{member.id}`)\n"
+        f"**Account created:** {account_created}\n"
+        f"**Joined this server:** {joined_server}\n"
+        f"**Trigger:** {message_count} messages across {channel_count} channels in 15 seconds\n"
+        f"**Removed/already gone:** {removed}/{attempted}\n"
+        f"**Restriction:** {result}\n"
+        "-# Please review the account and take further action if appropriate."
+    )
+    try:
+        await channel.send(report, allowed_mentions=discord.AllowedMentions.none())
+    except (discord.Forbidden, discord.HTTPException):
+        log.warning("could not send spam alert guild=%s channel=%s", guild.id, channel_id)
+
+
+async def _handle_spam_message(message: discord.Message) -> None:
+    guild = message.guild
+    if guild is None or not isinstance(message.author, discord.Member):
+        return
+    member = message.author
+    if member.bot or member.id == guild.owner_id:
+        return
+    permissions = message.channel.permissions_for(member)
+    if (
+        permissions.administrator
+        or permissions.manage_guild
+        or permissions.manage_messages
+        or permissions.moderate_members
+    ):
+        return
+
+    guild_settings = await _spam_settings(guild.id)
+    if not guild_settings.enabled:
+        return
+
+    decision = _spam_detector.observe(guild.id, member.id, message.channel.id, message.id)
+    if not decision.blocked:
+        return
+
+    removed, attempted = await _delete_spam_messages(message, decision.targets)
+    if not decision.newly_triggered:
+        return
+
+    timed_out = False
+    if guild_settings.timeout_enabled:
+        try:
+            await member.timeout(
+                timedelta(minutes=10),
+                reason="PokEvent: rapid cross-channel message flood",
+            )
+            timed_out = True
+        except (discord.Forbidden, discord.HTTPException):
+            log.warning(
+                "could not timeout suspected spammer guild=%s member=%s",
+                guild.id,
+                member.id,
+            )
+
+    try:
+        await member.send(
+            f"PokEvent detected unusually rapid posting across several channels in "
+            f"**{guild.name}**. Your recent messages were flagged for removal."
+            + (" You have been temporarily restricted for 10 minutes." if timed_out else "")
+            + " If this was a mistake, please contact the server moderators."
+        )
+    except (discord.Forbidden, discord.HTTPException):
+        pass  # Discord privacy settings can prevent DMs.
+
+    await _spam_alert(
+        guild,
+        member,
+        settings_for_guild=guild_settings,
+        message_count=decision.message_count,
+        channel_count=decision.channel_count,
+        removed=removed,
+        attempted=attempted,
+        timed_out=timed_out,
+    )
+
+
 
 def _supported_event_clause():
     return Event.source != "community"
@@ -83,6 +255,7 @@ class PokEventBot(commands.Bot):
         intents = discord.Intents.none()
         intents.guilds = True
         intents.members = True
+        intents.messages = True  # Message metadata only; no Message Content intent needed.
         super().__init__(command_prefix=commands.when_mentioned, intents=intents)
         self._synced_guild_ids: set[int] = set()
         self._global_commands_removed = False
@@ -173,6 +346,8 @@ class PokEventBot(commands.Bot):
 
     async def on_guild_remove(self, guild: discord.Guild) -> None:
         self._synced_guild_ids.discard(guild.id)
+        _spam_settings_cache.pop(guild.id, None)
+        _spam_detector.clear_guild(guild.id)
         async with SessionFactory() as session:
             await release_claim(session, str(guild.id))
             await session.commit()
@@ -186,6 +361,16 @@ class PokEventBot(commands.Bot):
         del before
         if self.user is not None and after.id == self.user.id:
             await _update_bot_runtime()
+
+    async def on_message(self, message: discord.Message) -> None:
+        try:
+            await _handle_spam_message(message)
+        except Exception:
+            log.exception(
+                "spam protection failed guild=%s member=%s",
+                message.guild.id if message.guild else None,
+                message.author.id,
+            )
 
     async def on_member_join(self, member: discord.Member) -> None:
         if member.bot:
@@ -1934,6 +2119,7 @@ async def _setup_dashboard_content(
         "text": "Text",
         "image": "Image banner",
     }.get(welcome_mode, "Off")
+    spam_label = "Enabled" if config.spam_protection_enabled else "Off"
     league_names = ", ".join(league.name for league in leagues[:6]) or "None"
     if len(leagues) > 6:
         league_names += f" +{len(leagues) - 6} more"
@@ -1948,6 +2134,7 @@ async def _setup_dashboard_content(
         f"**Announcement card types:** {len(enabled_card_types)}/{len(CARD_EVENT_TYPES)} enabled",
         f"**New-event notifications:** {mention_label}",
         f"**Member welcomes:** {welcome_label}",
+        f"**Spam Protection:** {spam_label}",
         "",
     ]
     if notice:
@@ -2078,6 +2265,7 @@ class SetupDashboardView(discord.ui.View):
         self.add_item(SetupDashboardButton(self, "refresh", "Refresh Summary", row=1))
         self.add_item(SetupDashboardButton(self, "close", "Close", row=1))
         self.add_item(SetupDashboardButton(self, "eventmanage", "Manage Events", row=2))
+        self.add_item(SetupDashboardButton(self, "spam", "Spam Protection", row=3))
         if settings.owner_user_id == invoker_id:
             self.add_item(SetupDashboardButton(
                 self, "claim_reviews", "League Claims", row=2,
@@ -2192,6 +2380,21 @@ class SetupDashboardView(discord.ui.View):
                 content=view.content(),
                 view=view,
             )
+            return
+
+        if action == "spam":
+            async with SessionFactory() as session:
+                config = await ensure_guild_config(session, self.guild_id)
+                await session.commit()
+            view = SpamProtectionManagerView(
+                invoker_id=self.invoker_id,
+                guild_id=self.guild_id,
+                enabled=config.spam_protection_enabled,
+                timeout_enabled=config.spam_timeout_enabled,
+                alerts_enabled=config.spam_alerts_enabled,
+                alert_channel_id=config.spam_alert_channel_id,
+            )
+            await interaction.response.edit_message(content=view.content(), view=view)
             return
 
         if action == "welcomes":
@@ -2333,6 +2536,273 @@ class SetupDashboardView(discord.ui.View):
             )
             self.stop()
             return
+
+
+
+
+class SpamProtectionModeSelect(discord.ui.Select):
+    def __init__(self, manager: SpamProtectionManagerView) -> None:
+        self.manager = manager
+        super().__init__(
+            placeholder="Spam Protection: Off / On",
+            options=[
+                discord.SelectOption(label="Off", value="off", default=not manager.enabled),
+                discord.SelectOption(label="On", value="on", default=manager.enabled),
+            ],
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        enabled = self.values[0] == "on"
+        if enabled:
+            error = self.manager.permission_error(interaction.guild)
+            if error:
+                await interaction.response.send_message(error, ephemeral=True)
+                return
+        self.manager.enabled = enabled
+        await self.manager.save()
+        self.manager.rebuild()
+        await interaction.response.edit_message(
+            content=self.manager.content(
+                notice=(
+                    "Spam Protection enabled. Please verify PokEvent's role position "
+                    "in Server Settings → Roles before relying on automatic timeouts."
+                    if enabled else "Spam Protection disabled."
+                )
+            ),
+            view=self.manager,
+        )
+
+
+class SpamProtectionActionSelect(discord.ui.Select):
+    def __init__(self, manager: SpamProtectionManagerView) -> None:
+        self.manager = manager
+        super().__init__(
+            placeholder="Choose what happens when spam is detected",
+            options=[
+                discord.SelectOption(
+                    label="Delete messages only",
+                    value="delete",
+                    default=not manager.timeout_enabled,
+                ),
+                discord.SelectOption(
+                    label="Delete and timeout for 10 minutes",
+                    value="timeout",
+                    default=manager.timeout_enabled,
+                ),
+            ],
+            row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        timeout_enabled = self.values[0] == "timeout"
+        if timeout_enabled and self.manager.enabled:
+            error = self.manager.permission_error(interaction.guild, require_timeout=True)
+            if error:
+                await interaction.response.send_message(error, ephemeral=True)
+                return
+        self.manager.timeout_enabled = timeout_enabled
+        await self.manager.save()
+        self.manager.rebuild()
+        await interaction.response.edit_message(
+            content=self.manager.content(notice="Moderation action saved."),
+            view=self.manager,
+        )
+
+
+class SpamProtectionAlertsSelect(discord.ui.Select):
+    def __init__(self, manager: SpamProtectionManagerView) -> None:
+        self.manager = manager
+        super().__init__(
+            placeholder="Notify server moderators?",
+            options=[
+                discord.SelectOption(
+                    label="No alerts", value="off", default=not manager.alerts_enabled,
+                ),
+                discord.SelectOption(
+                    label="Send alerts to selected channel",
+                    value="on",
+                    default=manager.alerts_enabled,
+                ),
+            ],
+            row=2,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        enabled = self.values[0] == "on"
+        if enabled and not self.manager.alert_channel_id:
+            await interaction.response.send_message(
+                "Please select a private moderator channel below first.",
+                ephemeral=True,
+            )
+            return
+        self.manager.alerts_enabled = enabled
+        await self.manager.save()
+        self.manager.rebuild()
+        await interaction.response.edit_message(
+            content=self.manager.content(notice="Moderator alert setting saved."),
+            view=self.manager,
+        )
+
+
+class SpamProtectionChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self, manager: SpamProtectionManagerView) -> None:
+        self.manager = manager
+        super().__init__(
+            placeholder="Select a private moderator alert channel",
+            channel_types=[discord.ChannelType.text],
+            min_values=1,
+            max_values=1,
+            row=3,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        channel = guild.get_channel(self.values[0].id) if guild is not None else None
+        if not isinstance(channel, discord.TextChannel) or guild.me is None:
+            await interaction.response.send_message(
+                "I could not resolve that text channel.", ephemeral=True,
+            )
+            return
+        permissions = channel.permissions_for(guild.me)
+        if not permissions.view_channel or not permissions.send_messages:
+            await interaction.response.send_message(
+                "I need View Channel and Send Messages permissions in that channel.",
+                ephemeral=True,
+            )
+            return
+        if channel.permissions_for(guild.default_role).view_channel:
+            await interaction.response.send_message(
+                "Choose a private staff channel; @everyone can see this channel.",
+                ephemeral=True,
+            )
+            return
+        self.manager.alert_channel_id = str(channel.id)
+        await self.manager.save()
+        self.manager.rebuild()
+        await interaction.response.edit_message(
+            content=self.manager.content(notice="Moderator alert channel saved."),
+            view=self.manager,
+        )
+
+
+class SpamProtectionBackButton(discord.ui.Button):
+    def __init__(self, manager: SpamProtectionManagerView) -> None:
+        self.manager = manager
+        super().__init__(label="Back to Setup", style=discord.ButtonStyle.secondary, row=4)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = SetupDashboardView(
+            invoker_id=self.manager.invoker_id,
+            guild_id=self.manager.guild_id,
+        )
+        await interaction.response.edit_message(
+            content=await _setup_dashboard_content(self.manager.guild_id),
+            view=view,
+        )
+
+
+class SpamProtectionManagerView(discord.ui.View):
+    def __init__(
+        self,
+        *,
+        invoker_id: int,
+        guild_id: str,
+        enabled: bool,
+        timeout_enabled: bool,
+        alerts_enabled: bool,
+        alert_channel_id: str | None,
+    ) -> None:
+        super().__init__(timeout=600)
+        self.invoker_id = invoker_id
+        self.guild_id = guild_id
+        self.enabled = enabled
+        self.timeout_enabled = timeout_enabled
+        self.alerts_enabled = alerts_enabled
+        self.alert_channel_id = alert_channel_id
+        self.rebuild()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if (
+            interaction.user.id == self.invoker_id
+            and str(interaction.guild_id) == self.guild_id
+            and interaction.user.guild_permissions.administrator
+        ):
+            return True
+        await interaction.response.send_message(
+            "Only the server administrator who opened setup can change these settings.",
+            ephemeral=True,
+        )
+        return False
+
+    def permission_error(
+        self,
+        guild: discord.Guild | None,
+        *,
+        require_timeout: bool = False,
+    ) -> str | None:
+        if guild is None or guild.me is None:
+            return "I cannot determine my moderation permissions in this server."
+        permissions = guild.me.guild_permissions
+        if not permissions.manage_messages:
+            return "PokEvent needs the **Manage Messages** permission to enable protection."
+        if (require_timeout or self.timeout_enabled) and not permissions.moderate_members:
+            return (
+                "PokEvent needs the **Moderate Members** permission for timeouts. "
+                "Choose **Delete messages only** or update my role permissions."
+            )
+        return None
+
+    async def save(self) -> None:
+        async with SessionFactory() as session:
+            config = await ensure_guild_config(session, self.guild_id)
+            config.spam_protection_enabled = self.enabled
+            config.spam_timeout_enabled = self.timeout_enabled
+            config.spam_alerts_enabled = self.alerts_enabled
+            config.spam_alert_channel_id = self.alert_channel_id
+            await session.commit()
+        guild_id = int(self.guild_id)
+        _spam_settings_cache.pop(guild_id, None)
+        if not self.enabled:
+            _spam_detector.clear_guild(guild_id)
+
+    def content(self, notice: str | None = None) -> str:
+        channel = f"<#{self.alert_channel_id}>" if self.alert_channel_id else "Not selected"
+        lines = [
+            "## 🛡️ Spam Protection",
+            f"**Protection:** {'On' if self.enabled else 'Off'}",
+            "**Detection:** 5 messages in 15 seconds across at least 3 channels",
+            f"**Action:** {'Delete messages + 10-minute timeout' if self.timeout_enabled else 'Delete messages only'}",
+            f"**Moderator alerts:** {'On' if self.alerts_enabled else 'Off'}",
+            f"**Alert channel:** {channel}",
+            "",
+            ("Detects rapid cross-channel floods, removes recent messages, and "
+             "continues removing new ones during a 10-minute block."),
+            "Administrators and moderators are exempt.",
+            "",
+            "**⚠️ Discord role hierarchy**",
+            ("For automatic timeouts, PokEvent's highest role must be **above** "
+             "the highest role of any member it needs to restrict. Check "
+             "**Server Settings → Roles** and move the PokEvent role higher "
+             "if necessary. **Administrator permission does not override "
+             "Discord's role hierarchy.**"),
+            ("-# PokEvent also needs Manage Messages for deletion and Moderate "
+             "Members for timeouts. Channel permissions can affect deletions."),
+            "-# Select a staff-only alert channel. Message contents are not read or stored.",
+            ("-# Ordinary messages cannot receive ephemeral replies; PokEvent attempts "
+             "a private DM instead."),
+        ]
+        if notice:
+            lines.extend(["", f"**{notice}**"])
+        return "\n".join(lines)
+
+    def rebuild(self) -> None:
+        self.clear_items()
+        self.add_item(SpamProtectionModeSelect(self))
+        self.add_item(SpamProtectionActionSelect(self))
+        self.add_item(SpamProtectionAlertsSelect(self))
+        self.add_item(SpamProtectionChannelSelect(self))
+        self.add_item(SpamProtectionBackButton(self))
 
 
 class EventMentionModeSelect(discord.ui.Select):

@@ -136,6 +136,33 @@ The CI workflow publishes `:latest` only after the test job passes on `main`.
 Version tags beginning with `v` are also published as matching container tags,
 which allows a deployment to be pinned to a specific release if desired.
 
+## Discord Spam Protection (opt-in)
+
+Server administrators can open `/pokevent setup` → **Spam Protection**.
+Protection is **off by default** for new and existing servers.
+
+When enabled, PokEvent detects 5 messages sent by the same member within 15
+seconds across at least 3 channels in that server. It attempts to remove the
+recent messages, and for the next 10 minutes it removes subsequent messages
+from the flagged account. Administrators and moderators are exempt.
+
+The administrator can also enable a 10-minute native Discord timeout and
+choose whether to send a detection report to a private staff-only text channel.
+The report shows the member, counts, removal result and timeout outcome;
+message contents are **never read or stored** for this feature.
+
+The bot needs **Manage Messages** in each protected channel and, for native
+timeouts, **Moderate Members** and a sufficiently high role. Staff alerts
+require **View Channel** and **Send Messages** in the chosen private channel.
+
+PokEvent tries to notify flagged users by DM. Discord ephemeral messages are
+only available for interactions, not ordinary chat, and DMs may be blocked by
+the user's privacy settings.
+
+This is reactive gateway moderation: initial posts can appear briefly before
+PokEvent deletes them. Discord's built-in AutoMod and raid protection should
+remain enabled as complementary first-line protections.
+
 ## Bot information
 
 - `GET /bot` shows live PokÈvent Discord bot information, uptime, server count and invite link.

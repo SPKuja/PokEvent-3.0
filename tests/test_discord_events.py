@@ -10,6 +10,7 @@ from pokevent.discord_bot import (
     EVENTS_PAGE_SIZE,
     POKEMON_WELCOME_MESSAGES,
     SetupDashboardView,
+    SpamProtectionManagerView,
     _event_announcement_mentions,
     _event_cleanup_at,
     _event_embed,
@@ -239,6 +240,28 @@ def test_claim_review_controls_only_visible_to_pokevent_owner(monkeypatch) -> No
     assert "Claim My League" in labels(guild_owner_view)
     assert "Claim My League" not in labels(ordinary_admin_view)
     assert "Manage Events" in labels(ordinary_admin_view)
+
+
+
+def test_spam_protection_is_a_setup_option_without_extra_commands() -> None:
+    assert bot.intents.messages
+    assert not bot.intents.message_content
+    dashboard = SetupDashboardView(invoker_id=3003, guild_id="123")
+    assert "Spam Protection" in {item.label for item in dashboard.children}
+
+    protection = SpamProtectionManagerView(
+        invoker_id=3003,
+        guild_id="123",
+        enabled=False,
+        timeout_enabled=True,
+        alerts_enabled=False,
+        alert_channel_id=None,
+    )
+    assert not protection.enabled
+    assert len(protection.children) == 5
+    assert "Protection:** Off" in protection.content()
+    assert "Discord role hierarchy" in protection.content()
+    assert "Administrator permission does not override" in protection.content()
 
 
 def test_manual_event_dates_use_uk_day_month_year_format() -> None:
