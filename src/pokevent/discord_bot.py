@@ -248,6 +248,7 @@ class PokEventBot(commands.Bot):
         intents = discord.Intents.none()
         intents.guilds = True
         intents.members = True
+        intents.messages = True  # Message metadata only; no Message Content intent needed.
         super().__init__(command_prefix=commands.when_mentioned, intents=intents)
         self._synced_guild_ids: set[int] = set()
         self._global_commands_removed = False
