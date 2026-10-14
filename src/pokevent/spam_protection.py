@@ -4,6 +4,7 @@ The detector is deliberately independent of Discord and the database so it can
 be tested without network access. This is *reactive* moderation: a gateway
 message has already been sent by the time we observe it.
 """
+
 from __future__ import annotations
 
 from collections import deque
