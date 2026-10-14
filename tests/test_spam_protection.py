@@ -31,7 +31,8 @@ def test_old_messages_and_other_guilds_do_not_contribute() -> None:
 
     for index in range(4):
         assert not detector.observe(2, 99, index, index, now=41.0).blocked
-    assert not detector.observe(1, 99, index, 100 + index, now=41.0).blocked
+    for index in range(3):
+        assert not detector.observe(1, 99, index, 100 + index, now=41.0).blocked
 
 
 def test_enforcement_expires_or_can_be_cleared_when_disabled() -> None:
