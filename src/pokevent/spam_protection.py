@@ -11,7 +11,6 @@ from collections import deque
 from dataclasses import dataclass
 from time import monotonic
 
-
 WINDOW_SECONDS = 15
 MESSAGE_LIMIT = 5
 CHANNEL_LIMIT = 3
