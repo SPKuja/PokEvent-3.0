@@ -2763,15 +2763,15 @@ class SpamProtectionManagerView(discord.ui.View):
             f"**Moderator alerts:** {'On' if self.alerts_enabled else 'Off'}",
             f"**Alert channel:** {channel}",
             "",
-            "Detects rapid cross-channel floods, removes recent messages, and "
-            "continues removing new ones during a 10-minute block.",
+            ("Detects rapid cross-channel floods, removes recent messages, and "
+             "continues removing new ones during a 10-minute block."),
             "Administrators and moderators are exempt.",
-            "-# PokEvent needs Manage Messages across protected channels and "
-            "Moderate Members for Discord timeouts. Channel-specific permission "
-            "overrides and role hierarchy may prevent actions.",
+            ("-# PokEvent needs Manage Messages across protected channels and "
+             "Moderate Members for Discord timeouts. Channel-specific permission "
+             "overrides and role hierarchy may prevent actions."),
             "-# Select a staff-only alert channel. Message contents are not read or stored.",
-            "-# Ordinary messages cannot receive ephemeral replies; PokEvent attempts "
-            "a private DM instead.",
+            ("-# Ordinary messages cannot receive ephemeral replies; PokEvent attempts "
+             "a private DM instead."),
         ]
         if notice:
             lines.extend(["", f"**{notice}**"])
