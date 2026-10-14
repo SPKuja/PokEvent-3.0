@@ -260,6 +260,8 @@ def test_spam_protection_is_a_setup_option_without_extra_commands() -> None:
     assert not protection.enabled
     assert len(protection.children) == 5
     assert "Protection:** Off" in protection.content()
+    assert "Discord role hierarchy" in protection.content()
+    assert "Administrator permission does not override" in protection.content()
 
 
 def test_manual_event_dates_use_uk_day_month_year_format() -> None:
