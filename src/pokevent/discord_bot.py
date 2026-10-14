@@ -2563,7 +2563,13 @@ class SpamProtectionModeSelect(discord.ui.Select):
         await self.manager.save()
         self.manager.rebuild()
         await interaction.response.edit_message(
-            content=self.manager.content(notice="Protection setting saved."),
+            content=self.manager.content(
+                notice=(
+                    "Spam Protection enabled. Please verify PokEvent's role position "
+                    "in Server Settings → Roles before relying on automatic timeouts."
+                    if enabled else "Spam Protection disabled."
+                )
+            ),
             view=self.manager,
         )
 
@@ -2773,9 +2779,15 @@ class SpamProtectionManagerView(discord.ui.View):
             ("Detects rapid cross-channel floods, removes recent messages, and "
              "continues removing new ones during a 10-minute block."),
             "Administrators and moderators are exempt.",
-            ("-# PokEvent needs Manage Messages across protected channels and "
-             "Moderate Members for Discord timeouts. Channel-specific permission "
-             "overrides and role hierarchy may prevent actions."),
+            "",
+            "**⚠️ Discord role hierarchy**",
+            ("For automatic timeouts, PokEvent's highest role must be **above** "
+             "the highest role of any member it needs to restrict. Check "
+             "**Server Settings → Roles** and move the PokEvent role higher "
+             "if necessary. **Administrator permission does not override "
+             "Discord's role hierarchy.**"),
+            ("-# PokEvent also needs Manage Messages for deletion and Moderate "
+             "Members for timeouts. Channel permissions can affect deletions."),
             "-# Select a staff-only alert channel. Message contents are not read or stored.",
             ("-# Ordinary messages cannot receive ephemeral replies; PokEvent attempts "
              "a private DM instead."),
